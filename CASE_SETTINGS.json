@@ -1,0 +1,222 @@
+{
+  "snapshotDate": "2026-10-29",
+  "scope": "Saved result configurations; code defaults are documented separately",
+  "channelCases": [
+    {
+      "resultFile": "results/channel_1d2v/couette/channel.mat",
+      "config": {
+        "flow": "Couette",
+        "cells": 64,
+        "gap": 1,
+        "delta": 1,
+        "velocityOrder": [
+          128,
+          8
+        ],
+        "normalQuadrature": "halfLegendre",
+        "wallVelocity": [
+          -0.01,
+          0.01
+        ],
+        "acceleration": 0,
+        "reference": true,
+        "referenceCells": 1024,
+        "referenceOrder": 160,
+        "initial": 0,
+        "maxIter": 30000,
+        "tol": 1E-10,
+        "checkEvery": 10,
+        "reportEvery": 100,
+        "plot": true,
+        "save": true,
+        "outputDir": "results/channel_1d2v"
+      },
+      "distributionShape": [
+        128,
+        1024
+      ],
+      "actualReferenceCells": 1024,
+      "actualReferencePositiveVelocityOrder": 160,
+      "converged": true,
+      "iterations": 16,
+      "kineticResidual": 8.0621249534130147E-11,
+      "relativeL2ToNumericalReference": 3.7278981679863177E-5,
+      "flowRate": 5.082197683525802E-19,
+      "gasWallVelocity": [
+        -0.0050199120541294714,
+        0.0050199120541294636
+      ]
+    },
+    {
+      "resultFile": "results/channel_1d2v/poiseuille/channel.mat",
+      "config": {
+        "flow": "Poiseuille",
+        "cells": 64,
+        "gap": 1,
+        "delta": 1,
+        "velocityOrder": [
+          128,
+          8
+        ],
+        "normalQuadrature": "halfLegendre",
+        "wallVelocity": [
+          0,
+          0
+        ],
+        "acceleration": 0.01,
+        "reference": true,
+        "referenceCells": 1024,
+        "referenceOrder": 160,
+        "initial": 0,
+        "maxIter": 30000,
+        "tol": 1E-10,
+        "checkEvery": 10,
+        "reportEvery": 100,
+        "plot": true,
+        "save": true,
+        "outputDir": "results/channel_1d2v"
+      },
+      "distributionShape": [
+        128,
+        1024
+      ],
+      "actualReferenceCells": 1024,
+      "actualReferencePositiveVelocityOrder": 160,
+      "converged": true,
+      "iterations": 39,
+      "kineticResidual": 6.1809198263353324E-11,
+      "relativeL2ToNumericalReference": 2.6708641546000815E-5,
+      "flowRate": 0.015386773944140748,
+      "gasWallVelocity": [
+        0.010221848183475553,
+        0.010221848183475549
+      ]
+    },
+    {
+      "resultFile": "results/channel_1d2v/delta10/couette/channel.mat",
+      "config": {
+        "flow": "Couette",
+        "cells": 128,
+        "gap": 1,
+        "delta": 10,
+        "velocityOrder": [
+          128,
+          8
+        ],
+        "normalQuadrature": "halfLegendre",
+        "wallVelocity": [
+          -0.01,
+          0.01
+        ],
+        "acceleration": 0,
+        "reference": true,
+        "referenceCells": 1024,
+        "referenceOrder": 160,
+        "initial": 0,
+        "maxIter": 30000,
+        "tol": 1E-10,
+        "checkEvery": 10,
+        "reportEvery": 100,
+        "plot": false,
+        "save": true,
+        "outputDir": "results/channel_1d2v/delta10"
+      },
+      "distributionShape": [
+        256,
+        1024
+      ],
+      "actualReferenceCells": 1024,
+      "actualReferencePositiveVelocityOrder": 160,
+      "converged": true,
+      "iterations": 160,
+      "kineticResidual": 9.6098558477764779E-11,
+      "relativeL2ToNumericalReference": 2.0356605964247746E-5,
+      "flowRate": 2.042365842419569E-17,
+      "gasWallVelocity": [
+        -0.0088065606656974587,
+        0.0088065606656974882
+      ]
+    },
+    {
+      "resultFile": "results/channel_1d2v/delta10/poiseuille/channel.mat",
+      "config": {
+        "flow": "Poiseuille",
+        "cells": 128,
+        "gap": 1,
+        "delta": 10,
+        "velocityOrder": [
+          128,
+          8
+        ],
+        "normalQuadrature": "halfLegendre",
+        "wallVelocity": [
+          0,
+          0
+        ],
+        "acceleration": 0.01,
+        "reference": true,
+        "referenceCells": 2048,
+        "referenceOrder": 320,
+        "initial": 0,
+        "maxIter": 30000,
+        "tol": 1E-10,
+        "checkEvery": 10,
+        "reportEvery": 200,
+        "plot": true,
+        "save": true,
+        "outputDir": "results/channel_1d2v/delta10"
+      },
+      "distributionShape": [
+        256,
+        1024
+      ],
+      "actualReferenceCells": 2048,
+      "actualReferencePositiveVelocityOrder": 320,
+      "converged": true,
+      "iterations": 579,
+      "kineticResidual": 9.7632254409767386E-11,
+      "relativeL2ToNumericalReference": 2.4796275650371125E-5,
+      "flowRate": 0.027686369106419015,
+      "gasWallVelocity": [
+        0.0076389700004194762,
+        0.0076389700004194988
+      ]
+    }
+  ],
+  "savedBGKDG": {
+    "resultFile": "results/bgk_dg/bgk_dg.mat",
+    "config": {
+      "meshFile": "mesh/nsw400.cas",
+      "domain": [],
+      "delta": 0.01,
+      "wallTemperature": [
+        0.95,
+        1.05
+      ],
+      "velocityOrder": [
+        16,
+        16
+      ],
+      "meanDensity": 1,
+      "source": 0,
+      "initial": 0,
+      "maxIter": 30000,
+      "tolMoment": 1E-9,
+      "tolKinetic": 1E-9,
+      "tolWall": 1E-9,
+      "checkEvery": 20,
+      "reportEvery": 500,
+      "plot": false,
+      "save": true,
+      "outputDir": "results/bgk_dg"
+    },
+    "converged": true,
+    "iterations": 6989,
+    "extent": [
+      0,
+      100,
+      0,
+      0.25
+    ]
+  }
+}

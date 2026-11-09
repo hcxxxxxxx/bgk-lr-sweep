@@ -1,0 +1,41 @@
+# Generated solver results, figures, reports, and scratch data.
+/results/
+/output/
+/tmp/
+/reference_runs/
+*.mat
+*.log
+*.fig
+*.png
+*.svg
+*.jpg
+*.jpeg
+*.gif
+*.tif
+*.tiff
+*.pdf
+*.zip
+
+# MATLAB autosave / build products.
+*.asv
+*.m~
+*.mex*
+*.mod
+*.o
+*.dSYM/
+
+# Local Python / editor / OS state.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.idea/
+.vscode/
+
+# Local credentials and environment settings.
+.env
+.env.*
+!.env.example
+.aws/
+.codex/

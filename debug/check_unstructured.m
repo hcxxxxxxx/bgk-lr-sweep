@@ -1,0 +1,60 @@
+root=fileparts(fileparts(mfilename('fullpath'))); addpath(root); out=fullfile(root,'results','unstructured');
+c=load(fullfile(out,'cis.mat')); n=load(fullfile(out,'ns.mat')); N=c.blks.meshInfo(3);
+assert(N>=50 && isequal(c.blks.faces,n.blks.faces) && isequal(c.cells.xy,n.cells.xy));
+assert(c.history(end,3)<1e-8 && n.info.history(end,1)<1e-8);
+assert(all(isfinite(c.f),'all') && all(isfinite(c.h),'all') && all(c.qf(:,[1,4])>0,'all'));
+assert(all(isfinite(n.macro.qf),'all') && all(n.macro.qf(:,[1,4])>0,'all'));
+assert(n.info.equation<1e-5);
+fid=fopen(fullfile(out,'validation.txt'),'w'); cleaner=onCleanup(@() fclose(fid));
+fprintf(fid,'Unstructured Fluent FV, cells %d, faces %d\n',N,c.blks.meshInfo(2));
+fprintf(fid,'CIS iterations %d, update %.12e, elapsed %.4f s\n',c.iter,c.history(end,3),c.history(end,4));
+fprintf(fid,'NS iterations %d, update %.12e, equation %.12e, elapsed %.4f s\n',n.info.iterations,n.info.history(end,1),n.info.equation,n.info.wall_time);
+% Recover the actual kinetic steady equation, without relying on update size.
+q=c.qf; vx=c.vx; vy=c.vy; T=q(:,4); rho=q(:,1); cx=vx-q(:,2); cy=vy-q(:,3); c2=cx.^2+cy.^2;
+E=rho./(2*pi*T).*exp(-c2./(2*T)); A=(1-c.gas.Pr)./(5*rho.*T.^2).*(c.sigmaq(:,4).*cx+c.sigmaq(:,5).*cy);
+G=E.*(1+A.*(c2./T-4)); H=T.*E.*(1+A.*(c2./T-2)); nu=c.gas.delta*rho.*T.^(1-c.gas.omega);
+L=c.blks.faces(:,3); R=c.blks.faces_ghost(:,4); ids=c.blks.boundary; qb=repmat(c.gas.left,numel(ids),1); right=c.blks.faces_tag(ids)==3;
+qb(right,:)=repmat(c.gas.right,nnz(right),1); fb=qb(:,1)./(2*pi*qb(:,4)).*exp(-((vx-qb(:,2)).^2+(vy-qb(:,3)).^2)./(2*qb(:,4))); hb=qb(:,4).*fb;
+reflect=flipud(reshape(1:numel(vx),80,96)); reflect=reflect(:)'; sym=c.blks.faces_tag(ids)==1;
+fb(sym,:)=c.f(L(c.blks.sym),reflect); hb(sym,:)=c.h(L(c.blks.sym),reflect);
+f=[c.f;fb]; h=[c.h;hb]; vn=c.edges.enormal(:,1)*vx+c.edges.enormal(:,2)*vy;
+F=max(vn,0).*f(L,:)+min(vn,0).*f(R,:); Hf=max(vn,0).*h(L,:)+min(vn,0).*h(R,:);
+rf=nu.*(G-c.f)-(c.blks.scatter*(F.*c.edges.elength))./c.cells.A;
+rh=nu.*(H-c.h)-(c.blks.scatter*(Hf.*c.edges.elength))./c.cells.A;
+equation=max([max(abs(rf),[],'all'),max(abs(rh),[],'all')]);
+flow=c.dv*[sum(F,2),sum(F.*vx,2),0.5*sum((vx.^2+vy.^2).*F+Hf,2)];
+axial=abs(c.edges.enormal(:,1))>0.99; flow=flow(axial,:).*c.edges.enormal(axial,1);
+spread=max((max(flow)-min(flow))./max(abs(mean(flow)),1));
+fprintf(fid,'CIS steady kinetic equation max %.12e; axial flux relative spread %.12e\n',equation,spread);
+assert(equation<1e-5 && spread<1e-4);
+fprintf('Pure CIS and pure NS gates PASSED. Kinetic equation %.4e; flux spread %.4e\n',equation,spread);
+[closure,base]=nsw_closure(c.qf,c.blks,c.cells,c.edges,c.gas); hot.cell=c.sigmaq-closure; ids=c.blks.far;
+kineticBoundary=c.dv*[sum(F(ids,:),2),sum(F(ids,:).*vx,2),sum(F(ids,:).*vy,2),0.5*sum((vx.^2+vy.^2).*F(ids,:)+Hf(ids,:),2)];
+hot.boundary=kineticBoundary-base; recovery=max(abs(base+hot.boundary-kineticBoundary),[],'all');
+macro=c.macro; macro.qf=c.qf; [frozen,frozenInfo]=monoNS(macro,c.blks,c.cells,c.edges,c.gas,hot,100);
+drift=max(sqrt(sum((frozen.qf-c.qf).^2)./max(sum(c.qf.^2),N)));
+fprintf(fid,'Frozen HoT 100 NS steps: boundary recovery %.12e, macro drift %.12e, equation %.12e\n',recovery,drift,frozenInfo.equation);
+assert(recovery<1e-12);
+if exist(fullfile(out,'gsis.mat'),'file')
+    g=load(fullfile(out,'gsis.mat'));
+    assert(isequal(c.blks.faces,g.blks.faces) && isequal(c.cells.xy,g.cells.xy) && isequal(c.gas,g.gas));
+    assert(isequal(c.history(1:10,1:3),g.history(1:10,1:3)));
+    assert(g.history(end,3)<1e-6 && all(g.qf(:,[1,4])>0,'all') && all(isfinite(g.f),'all') && all(isfinite(g.h),'all'));
+    difference=sqrt(sum((g.qf-c.qf).^2)./max(sum(c.qf.^2),N));
+    fprintf(fid,'GSIS iterations %d incl 10 CIS, update %.12e, elapsed %.4f s\n',g.iter,g.history(end,3),g.history(end,4));
+    fprintf(fid,'GSIS vs CIS unshifted normalized differences rho ux uy T: %.8e %.8e %.8e %.8e\n',difference);
+    fprintf(fid,'First 10 CIS updates exactly equal. Finite distributions and positive rho,T checked.\n');
+    fprintf(fid,'GSIS final frozen macro equation %.12e; minimum rho %.12e, minimum T %.12e\n',g.ns_info.equation,min(g.qf(:,1)),min(g.qf(:,4)));
+    [x,order]=sort(c.cells.xy(:,1)); figure('Color','w','Position',[100,100,1150,660]); tiledlayout(2,3);
+    variables=[1,2,4]; names={'rho','u_x','T'};
+    for k=1:3
+        nexttile; plot(x,c.qf(order,variables(k)),'k-',x,g.qf(order,variables(k)),'r--',x,n.macro.qf(order,variables(k)),'b:','LineWidth',1.2); xlabel('x'); ylabel(names{k}); xlim([-15,15]);
+    end
+    legend('CIS','GSIS kinetic','Pure NS','Location','best');
+    nexttile; plot(x,c.sigmaq(order,1),'k-',x,g.sigmaq(order,1),'r--',x,n.macro.sigmaq(order,1),'b:','LineWidth',1.2); xlabel('x'); ylabel('sigma_{xx}'); xlim([-15,15]); ylim([-0.05,1.1*max(c.sigmaq(:,1))]);
+    nexttile; plot(x,c.sigmaq(order,4),'k-',x,g.sigmaq(order,4),'r--',x,n.macro.sigmaq(order,4),'b:','LineWidth',1.2); xlabel('x'); ylabel('q_x'); xlim([-15,15]);
+    nexttile; loglog(1:c.iter,c.history(:,3),'k-',1:g.iter,g.history(:,3),'r-'); xlabel('outer iteration'); ylabel('update'); legend('CIS','GSIS','Location','best'); grid on;
+    exportgraphics(gcf,fullfile(out,'comparison.png'),'Resolution',160);
+    fprintf('GSIS gate PASSED; %d steps, update %.4e.\n',g.iter,g.history(end,3));
+end
+clear cleaner;
