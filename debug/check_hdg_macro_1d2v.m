@@ -139,12 +139,13 @@ for name={'couette','poiseuille'}
     k=cases.(name{1});
     [q,~,h,hot]=gsis_macro_from_kinetic_1d2v(k);
     check_residuals(h);
-    assert(max(abs(hot.boundary.trace(:,2)))<1e-12);
-    assert(max(abs(h.Uhat([1 end],:)-hot.boundary.trace),[],'all')<1e-12);
-    assert(strcmp(hot.derivativeMethod,'interior'));
+    assert(strcmp(hot.boundary.kind,'kineticFlux'));
+    assert(strcmp(hot.derivativeMethod,'upwindWeak'));
+    assert(h.boundaryFluxResidual<1e-11 && h.bc.densityConstraintResidual<1e-11);
+    assert(abs(h.bc.gaugeMultiplier)<1e-11);
     expectedBoundary=[k.nodalMoments([1 end],1)+k.nodalMoments([1 end],4), ...
-        zeros(2,1),k.nodalMoments([1 end],3:4)];
-    assert(max(abs(hot.boundary.trace-expectedBoundary),[],'all')<1e-12);
+        k.nodalMoments([1 end],2:4)];
+    assert(max(abs(hot.boundary.state-expectedBoundary),[],'all')<1e-12);
     change=norm(q.nodal(:,3)-k.nodalMoments(:,3))/norm(k.nodalMoments(:,3));
     fprintf('PASS kinetic-to-HDG %s: local %.3e, trace %.3e, kinetic uy change %.6e\n', ...
         name{1},h.localResidual,h.traceResidual,change);

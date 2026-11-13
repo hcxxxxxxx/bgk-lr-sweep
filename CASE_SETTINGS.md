@@ -1,5 +1,7 @@
 # 测试算例设置
 
+2026-11-12 二维方腔更新：`monoGSISCavity2D2V` 默认采用最新 Gray 参考算法结构，稳定参数 `[1 1 1 1]`、完整宏观回传、无内部残差匹配载荷、单元积分宏观更新停机 `tol=1e-5`。高阶项使用本次扫描的壁面入射量，仿射宏观壁面通量另用扫描后的分布构造。物理模型保留 2V BGK。当前 delta=100/1000 的独立结果与旧版本分开，见 `results/cavity_gsis_gray_defaults_2d2v/summary.csv` 和 README 的“二维方腔 GSIS”；以下通道配置与历史快照不因这次二维修改而改变。
+
 历史主结果核对日期：2026-10-29。通道测试包含 Couette 与 Poiseuille 各两组，碰撞参数分别为 delta=1 和 delta=10。下表列出四组已保存主结果的实际设置；直接运行的默认值、加密验证和其他求解器在后文列出。
 
 2026-11-05 起，CIS/GSIS 默认统一为参考代码的单元宏观量相对更新停机，`stopCriterion='reference'`、`tol=1e-5`。下表和 JSON 保留历史快照；复现历史结果须显式使用 `stopCriterion='equation'`。新结果见文末。
@@ -73,7 +75,7 @@ P(H) = rho_pert + 2*vx*ux + 2*vy*uy + T_pert*(vx²+vy²-1)
 
 `rho_pert`、`T_pert` 为扰动量：实际密度和线性化温度为 `1+rho_pert`、`1+T_pert`。本模型采用二维速度温度基函数；不含第三速度方向的独立约化能量分布、黏性加热或 Shakhov 修正。上表保存结果为 CIS；新增的 `monoGSIS1D2V` 入口使用同一 kinetic 模型与 HDG 宏观方程耦合，见下文。
 
-delta=1、10 是碰撞强弱对照的试算值，壁速 0.01 和加速度 0.01 用于小扰动试算。新增 GSIS 按参考代码取 `Kn_cell=sqrt(pi)/(2*delta*dx)` 计算混合系数；这些数值尚未对应到某组有量纲气体和壁面参数。
+delta=1、10 是碰撞强弱对照的试算值，壁速 0.01 和加速度 0.01 用于小扰动试算。2026-11-10 起 GSIS 完整回传宏观源，兼容字段 omega 恒为 1；这些数值尚未对应到某组有量纲气体和壁面参数。
 
 ## 通道共同数值设置
 
@@ -203,15 +205,17 @@ L2 数值是相对差异，例如 `2.48e-5` 对应约 `0.00248%`；它包含被�
 
 ## 新增参考代码式 1D2V GSIS（2026-11-03）
 
-入口为 `monoGSIS1D2V`，当前默认 64 空间单元、32×32 速度点、delta=1、`stopCriterion='reference'`、tol=1e-5。Couette/Poiseuille 的 kinetic 驱动、漫反射壁面和速度求积沿用 `mono1D2V`。宏观采用压力变量 `p=rho+T`、两倍尺度动量方程、单元内部高阶项导数，以及单元内壁面矩（法向速度置零）。稳定参数仍为 `[1 delta delta delta]`。
+入口为 `monoGSIS1D2V`，当前默认 64 空间单元、32×32 速度点、delta=1、`stopCriterion='reference'`、tol=1e-5。Couette/Poiseuille 的 kinetic 驱动、漫反射壁面和速度求积沿用 `mono1D2V`。2026-11-10 更新：宏观采用压力变量 `p=rho+T`、两倍尺度动量方程、含 kinetic 迎风面项的高阶弱导数，以及 `F_HDG=F_kinetic+Jwall*(U-Ukinetic)` 壁面通量条件；闭合通道增加密度均值约束。另加七矩弱残差载荷修正，使原 kinetic-DG 的零残差对应零宏观修正。稳定参数仍为 `[1 delta delta delta]`。
 
-每轮只将 `Qkin+omega*(Qmacro-Qkin)` 放入下一轮 kinetic 碰撞源，`omega=min(1,1/Kn_cell)`；宏观步不修改分布 H。停机对齐参考代码：计算每单元完整密度积分、完整温度积分、速度积分的模，分别取新旧两轮差的 L2 范数除以当前量的 L2 范数，三者最大值小于 1e-5 时停止。CIS 监测 kinetic 矩，GSIS 监测混合源矩。耦合残差、原 CIS 残差和壁面误差继续记录，不参与默认停机。结果剖面和流量始终来自 kinetic H。
+每轮将 `Qmacro` 直接放入下一轮 kinetic 碰撞源；宏观步不修改分布 H。停机对齐参考代码：计算每单元完整密度积分、完整温度积分、速度积分的模，分别取新旧两轮差的 L2 范数除以当前量的 L2 范数，三者最大值小于 1e-5 时停止。CIS 监测 kinetic 矩，GSIS 监测回传源矩。耦合残差、原 CIS 残差和壁面误差继续记录，不参与默认停机。结果剖面和流量始终来自 kinetic H。
 
 ```matlab
 r = monoGSIS1D2V(struct('delta',10,'plot',false,'save',false));
 [summary,runs] = runGSISChannelComparison;
 ```
 
-对照脚本默认使用 64 单元，分别计算 delta=1/10 两个流的 CIS 和 GSIS，参考停机结果位于 `results/gsis_channel_comparison/reference_stopping`。2026-11-05 实测 CIS/GSIS 步数依次为：Couette delta=1：11/11，Poiseuille delta=1：23/23，Couette delta=10：82/47，Poiseuille delta=10：251/66。
+当前专项对照为 `addpath('debug'); check_gray_gsis_coupling_1d2v`：64 单元，32×32 referenceCubic（两方向截断 ±4、零附近加密），delta=0.1/1/10，阈值 1e-5/1e-9/1e-11，结果位于 `results/gray_consistent_coupling32`。1e-5 下 CIS/GSIS 步数依次为 Couette 5/5、11/9、82/8，Poiseuille 8/5、23/8、251/14；详见 README 当前结果表。该专项配置显式指定 referenceCubic，不改变求解器默认速度规则。
+
+通用对照脚本 `runGSISChannelComparison` 默认使用 64 单元，分别计算 delta=1/10 两个流，结果位于 `results/gsis_channel_comparison/reference_stopping`。此目录尚存的 2026-11-05 数据属于旧实现，CIS/GSIS 步数为 Couette delta=1：11/11，Poiseuille delta=1：23/23，Couette delta=10：82/47，Poiseuille delta=10：251/66；不作为当前版本结果。
 
 `results/gsis_channel_comparison` 根目录保留旧的严格方程停机对照和 `refinement.csv`，不与新的默认结果混用。细节和验证入口见 [README](README.md)。

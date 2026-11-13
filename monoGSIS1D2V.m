@@ -1,9 +1,12 @@
 function result = monoGSIS1D2V(options)
-%MONOGSIS1D2V Reference-style 1D2V BGK/HDG coupled iteration, without H lift.
+%MONOGSIS1D2V Full-state 1D2V BGK/HDG coupling with kinetic-flux walls.
 % r=monoGSIS1D2V; runs Couette and Poiseuille, with S=[1 delta delta delta].
 % r=monoGSIS1D2V(struct('flow','Poiseuille','delta',10,'plot',false));
-% Only source moments are mixed: Qsrc=Qkin+omega*(Qmacro-Qkin), where
-% omega=min(1,1/Kn_cell), Kn_cell=sqrt(pi)/(2*delta*dx).
+% Qsrc=Qmacro is returned directly, without an H lift or small mixing factor.
+% HOT derivatives include actual upwind face moments. Wall traces follow
+% F_HDG=F_kinetic+J*(U-Ukinetic); the mean density gauge is fixed to zero.
+% A seven-moment weak load correction preserves the kinetic-DG fixed point.
+% options.macroParam.kineticConsistency=false disables that extra load only.
 % Default stopping matches reference cell-macro relative updates, tol=1e-5.
 % diagnostics.kinetic/coupled separately report both equation residuals;
 % stopCriterion='equation' optionally restores residual-based stopping.

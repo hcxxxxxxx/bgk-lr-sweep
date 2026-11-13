@@ -11,13 +11,14 @@ c=mono1D2V(base); g=monoGSIS1D2V(base);
 % First kinetic sweep must be identical: the macro solve never lifts H.
 assert(isequal(c.H,g.H) && isequal(c.kineticTrace,g.kineticTrace));
 assert(isequal(g.synthetic.hdg.cache.stabilization,[1 10 10 10]));
-expected=g.nodalMoments+g.synthetic.omega.*(g.synthetic.macro.nodal-g.nodalMoments);
+assert(all(g.synthetic.omega==1));
+expected=g.synthetic.macro.nodal;
 expected(:,1)=expected(:,1)-mean(expected(:,1));
 assert(max(abs(expected-g.synthetic.sourceMoments),[],'all')<1e-14);
 assert(norm(g.synthetic.sourceMoments-g.nodalMoments,'fro')>1e-6);
-fprintf('PASS identical first kinetic sweep, no H lift, mixed source and unchanged stabilization.\n');
+fprintf('PASS identical first kinetic sweep, no H lift, full macro source and unchanged stabilization.\n');
 
-% Independently solve the SECOND kinetic step using the saved mixed source.
+% Independently solve the SECOND kinetic step using the returned macro source.
 two=base; two.maxIter=2; r=monoGSIS1D2V(two);
 v=g.velocity; N=g.mesh.count; M=g.mesh.dx*[2 1;1 2]/6; G=[-1 -1;1 1]/2;
 source=(g.synthetic.sourceMoments/v.gram)*v.basis';
@@ -41,7 +42,7 @@ for j=1:numel(v.normal)
 end
 H=H-mean(H*v.weight);
 assert(max(abs(H-r.H),[],'all')<1e-12);
-fprintf('PASS second kinetic step uses the mixed macro source, not overwritten kinetic moments.\n');
+fprintf('PASS second kinetic step uses the returned macro source.\n');
 
 % Evaluate the actual coupled DG residual independently from local weak
 % transport, the complete numerical trace and the NEW source moments.

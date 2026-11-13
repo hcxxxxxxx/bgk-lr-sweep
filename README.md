@@ -1,5 +1,7 @@
 # MATLAB 有限体积正激波 GSIS 算例
 
+新增二维顶盖驱动方腔入口 [`monoCavity2D2V.m`](monoCavity2D2V.m)（CIS）及 [`monoGSISCavity2D2V.m`](monoGSISCavity2D2V.m)（GSIS），配置、二维宏观方程和对比结果见下面的“二维 BGK 方腔”。
+
 另有独立的 **1D2V Couette / Poiseuille** 文件 [`mono1D2V.m`](mono1D2V.m)：直接运行默认分别计算两个算例；用法见本文末尾。该文件不读取 Fluent 网格，也不调用原有激波求解器。
 
 另有按用户提供 PDF 实现的独立线性化 BGK / Q1-DG 求解器 `monoBGKDG.m`，使用同一个 `mesh/nsw400.cas`。运行方式与模型说明见本文末尾的 **PDF BGK / Q1-DG solver**。原有 CIS、NS、GSIS 求解器保持原样。
@@ -110,6 +112,137 @@ CIS 最终动理学方程最大绝对残差3.6885e-8，轴向质量/动量/能�
 GSIS 与 CIS 未平移的 rho/ux/T 归一化 L2 差异分别为0.945%、0.765%、0.757%。应力和热流仍有更明显差异，见 `comparison.png`，不能仅以更新误差小或迭代少宣称物理精度等同。这些是当前一阶离散的结果，不是空间独立性结论。
 
 详细记录见 `results/unstructured/validation.txt`。轻量 ZIP 提供源码、原始网格、验证脚本、DAT、PNG及日志，不包含大型分布 MAT；按运行顺序执行后会重新生成 MAT。旧的一维数组版不包含在新版 ZIP 中。
+
+## 二维 BGK 方腔
+
+2026-11-11：`monoCavity2D2V` 在 `[0,1]×[0,1]` 上求解线性化二维速度 BGK：
+
+```text
+vx*dH/dx + vy*dH/dy = delta*(P(H)-H)
+M0=exp(-vx^2-vy^2)/pi
+P(H) 由同一离散 Gram 投影保持质量、两方向动量和能量矩
+```
+
+顶壁沿 x 正向运动，`lidSpeed=0.01`；其余三壁静止。四壁完全漫反射、等温，壁温扰动为零，无体力。入射分布 `H_in=rhoWall+2*(vx*Uw_x+vy*Uw_y)`，壁面密度由同面出射分布及零法向质量通量确定。顶壁和侧壁在角点处各自按面法向提供入射条件，不对角点壁速作平均。不把气体速度强制设成壁速，因此可有滑移。
+
+空间为矩形 Q1-DG，每单元 4 个节点，两个空间方向都离散；内部面按每个离散速度迎风。默认均匀 24×24 单元、32×32 referenceCubic 速度点，两速度都截断于 ±4、零附近加密。`meshStretch>0` 可向四壁加密，`quadrature='hermite'` 可切换为 Gauss-Hermite。`monoCavity2D2V` 默认使用 CIS，碰撞源和漫反射壁面密度滞后一轮，闭合方腔密度扰动体平均约束为零。二维 GSIS 使用下述独立入口。
+
+停止时要求宏观相对更新和原 kinetic 方程相对残差都小于 `tol=1e-7`，最后一次 sweep 的壁面质量通量小于 `tol*abs(lidSpeed)`。密度/温度更新以完整参考量归一化，速度以当前速度向量范数归一化；方程残差使用速度权重和空间逆质量矩阵形成 L2 范数，除以共同首步残差。每步都用当前 H 自身的矩和当前漫反射映射重算原方程残差，未用冻结源局部求解残差代替。
+
+```matlab
+r = monoCavity2D2V(struct('delta',10,'cells',[32 32]));
+addpath('debug');
+check_cavity_2d2v;  % 独立 Gauss 积分整体 kinetic 线性系统、质量通量、反向驱动、对称性
+summary = run_cavity_2d2v; % delta=1/10，24×24 与 32×32，固定 32×32 速度点
+```
+
+输出位于 `results/cavity_2d2v/delta_10_N32x32` 等独立目录。`cavity.png` 依次展示速度大小/箭头、流线、竖直中心线 ux、水平中心线 uy；`profile.csv` 为单元中心 `[x,y,rhoPert,ux,uy,TPert,Pxy]`，`history.csv` 为更新及方程残差历史，`cavity.mat` 保存完整分布与配置。总表为 `summary.csv`，空间加密对照为 `resolution.csv`。主涡位置由对称轴 x=0.5 上 ux 的负到正零点估计。空间加密差异只比较两张网格的中心线，不作为连续解或文献精度证明。
+
+独立 2×2 小网格、4×4 Gauss-Hermite 速度点核查中，迭代 H 与一次性组装的完整 kinetic 方程直接解最大差约 4.4e-13；四壁零质量通量、碰撞守恒、反向驱动线性关系、静止平衡及方腔对称性均通过。
+
+32×32 空间网格实测：delta=1、10 分别 22、160 步，原 kinetic 绝对残差 4.6426e-10、1.3064e-9，相对首步残差 1.6398e-8、9.1910e-8。两者均出现顺时针主涡，涡心近似为 (0.5,0.7010)、(0.5,0.7419)。24→32 空间加密时，竖直中心线 ux 的相对 L2 变化为 0.7625%、0.1235%，水平中心线 uy 为 0.9847%、0.1770%；迭代次数均保持 22/160。尚未进行速度网格独立性和外部文献比对。
+
+指定的 delta=100、纯 CIS、1e-5 角涡测试使用 32×32 的双向 tanh 加密网格，`meshStretch=2`，速度仍为 32×32 referenceCubic。复现：
+
+```matlab
+r=monoCavity2D2V(struct('cells',32,'meshStretch',2,'delta',100, ...
+    'iterationMethod','CIS','tol',1e-5,'maxIter',30000,'reportEvery',200, ...
+    'outputDir',fullfile(pwd,'results','cavity_delta100_cis_tol1e5')));
+addpath('debug'); analyze_cavity_delta100_cis;
+```
+
+`bottom_corners.png` 放大左右底角；上排为原始速度流线，下排为实际 kinetic 面质量通量重构的流函数。`vortex_candidates.csv` 记录原始单元平均速度双线性插值的椭圆型零点，并非仅凭插值流线判定涡旋。流函数通过边通量最小二乘重构，投影误差另存，不能把弱于此误差的等值线作为可靠角涡。该测试不使用 GMRES，也不使用 GSIS。`check_cavity_2d2v` 另独立核对了四个速度符号象限的显式扫描与直接输运解，最大差约 7.1e-15。
+
+本次 delta=100 纯 CIS 在第 2803 步通过停止条件，宏观相对更新 5.0033e-7，原 kinetic 相对残差 9.9962e-6、绝对残差 3.3166e-7。可以分辨左右底角各一个逆时针小涡，原始速度插值的涡心约为 (0.02787,0.02811)、(0.97213,0.02811)，主涡顺时针，中心约为 (0.5,0.76205)。两角流函数为正、主涡为负，角涡流函数约 1.55e-8，边通量流函数投影的最大误差约 2.69e-10。最小单元宽度 0.005177。该单网格、单速度求积测试观察到一对角涡，尚未证明其精确位置/强度收敛，也未分辨更高阶涡列；不作为二维 GSIS 验证结果。
+
+### 二维方腔 GSIS
+
+`hdg_precompute_q1_2d2v` 和 `gsis_macro_from_kinetic_2d2v` 实现真正的二维 Q1-HDG 宏观子问题。每单元 8 个字段 `[p,ux,uy,T,Lxx,Lxy,Ex,Ey]`、每字段 4 节点，每面有 `[p,ux,uy,T]` 的 2 个公共节点；`p=rho+T`。物理应力和热流为 `sigma_xx=-Lxx/delta`、`sigma_xy=-Lxy/delta`、`qx=-Ex/delta`、`qy=-Ey/delta`。
+
+```text
+div(u) = 0
+d_x(p-Lxx/delta) - d_y(Lxy/delta) = 0
+-d_x(Lxy/delta) + d_y(p+Lxx/delta) = 0
+div(-E/delta) = 0
+Lxx = d_x ux - d_y uy + Pi_xx
+Lxy = d_y ux + d_x uy + Pi_xy
+Ex  = d_x T + Theta_x; Ey = d_y T + Theta_y
+```
+
+2026-11-12，当前二维默认算法按最新 `GSIS_Gray_20261110.zip` 的宏观离散及迭代结构对齐。已逐字节核对解压的 `Synthetic_Acceleration.f90`、`Velocity_Distribution.f90` 和主程序与原 ZIP 相同。参考程序是 Callaway 声子模型，当前仍为 2V BGK；物理矩定义、碰撞系数、密度零空间以及矩形 Q1 网格保留 BGK 设置，不能称为相同物理算例或逐系数移植。
+
+对应关系为：参考宏观标量 T 对应此处压力 p，参考矢量 q 对应此处速度 u；质量数值通量使用单元内法向速度，动量通量压力使用公共 trace。四个高阶项使用体积分及 kinetic 迎风面的弱导数。特别地，高阶项的壁面入射部分使用本次输运扫描实际使用的滞后壁面密度（随 kinetic 密度规范同步平移），而宏观仿射壁面通量由扫描后的 H 重新漫反射得到。两者的取值时刻不同，与参考代码的 `Evaluate_Upwind_Face_Load` 和 `Calculate_Kinetic_Boundary_Flux_Moments` 分别对应。单独提供 H 而没有 `transportWallDensity` 的宏观调用会重构当前壁面入射量，`hdg.hotUsesTransportWallInflow` 标明实际路径。
+
+默认稳定参数改为 `[1 1 1 1]`，与参考 `ST=1` 相同且不随 delta 改变。四壁采用 `F_HDG=F_kinetic+Jwall*(U-Ukinetic)`，由 BGK 离散漫反射规则和碰撞平衡态切线构造 Jacobian。通过体平均密度约束消除零空间，不删除守恒方程。每轮将整个 `Qmacro=[rho ux uy T]` 回传下一轮碰撞源，不改写 H。默认 `kineticConsistency=false`、`relaxation=1`，不添加内部残差匹配载荷或自动选择回传松弛。
+
+二维 GSIS 入口默认 `tol=1e-5`，按返回宏观量的单元积分更新停止，移植参考 `Update_Macro_Residual` 的逐分量范数和小分母分支；BGK 使用全密度 `1+rho`、全温度 `1+T` 及单位热速度尺度下的 ux/uy。每个分量先计算单元积分向量 a，令 `r0=max(1,max_k norm(a_k)^2)`；若 `norm(a_k)^2>tol^2*r0`，使用 `norm(a_k-a_old_k)/norm(a_k)`，否则除以 `sqrt(r0)`；最后取四分量最大值。原 kinetic 残差、耦合残差和壁面质量通量继续记录，不参与这个默认停机判断。`r.convergenceCriterion='referenceCellIntegratedMacroUpdate'`，`r.diagnostics.originalConverged` 独立标记原方程是否达到阈值。`history.csv` 第 10-13 列保存四个停机分量，不能将宏观更新停止称为原方程已收敛。
+
+原有八矩残差匹配和回传松弛仍可显式设置，属于另一个实验版本；`kineticConsistency=true` 或 `requireOriginalResidual=true` 会额外要求原方程和耦合方程残差通过。这些选项不属于当前参考默认算法。若需旧稳定参数，显式传入 `macroParam.stabilization=[1 delta delta delta]`。
+
+```matlab
+g=monoGSISCavity2D2V(struct('cells',32,'meshStretch',2,'delta',100, ...
+    'tol',1e-5,'reportEvery',20));
+addpath('debug'); check_gray_defaults_cavity_2d2v; check_gsis_cavity_2d2v;
+summary=run_gray_aligned_cavity_2d2v; % 当前默认值，独立保存 delta=100/1000
+```
+
+最新默认配置复测：32×32 Q1、meshStretch=2、32×32 referenceCubic 速度、顶盖速度 0.01、零初值、tol=1e-5。
+
+| delta | 宏观更新停止步数 | 宏观更新量 | 原 kinetic 相对残差 | 耦合相对残差 | 实际 kinetic 速度相对保存的 CIS 差异 |
+|---|---:|---:|---:|---:|---:|
+| 100 | 14 | 5.7450e-6 | 1.3012e-2 | 1.1323e-3 | 0.15622% |
+| 1000 | 7 | 9.0239e-6 | 1.3310e-2 | 3.9222e-4 | 未运行同配置 CIS |
+
+这两组只通过参考宏观更新停止，原 kinetic 方程没有达到 1e-5。宏观壁面通量关系误差分别为 1.63e-19、1.08e-19；这是宏观线性子问题误差，不是 kinetic 方程残差。完整结果、逐步四分量更新、H 和最后扫描入射密度位于 `results/cavity_gsis_gray_defaults_2d2v/`，总表为 `summary.csv`。独立检查覆盖实际扫描入射量的高阶面矩、宏观壁面取值时刻、四法向通量、Jacobians、凝聚与整体求解，以及完整回传但不修改 H。
+
+以下为历史结果，使用旧的 delta 稳定参数和旧停机配置，不代表当前默认算法。2026-11-11，同一 delta=100、32×32 角点加密空间网格、32×32 速度点、零初值、tol=1e-5：
+
+| 方法 | 外迭代步数 | 原 kinetic 相对残差 | 速度相对 CIS 差异 | 底角小涡 |
+|---|---:|---:|---:|---:|
+| CIS | 2803 | 9.9962e-6 | — | 2 |
+| GSIS，参考结构、omega=1 | 18 | 6.0336e-2 | 0.48689% | 2 个速度零点，但原方程未通过 |
+| GSIS，八矩一致性修正、omega=0.1 | 100 | 2.5682e-6 | 0.019544% | 2 |
+
+后一版本原方程绝对残差 8.5209e-8，耦合相对残差 9.5552e-6。左右角涡中心约为 (0.02780,0.02819)、(0.97220,0.02819)，主涡约为 (0.5,0.76197)，保持与 CIS 相同的旋转结构。该差异包含 CIS 本身有限停止阈值带来的误差，不等同于相对连续解误差。
+
+正式对比位于 `results/cavity_gsis_comparison_delta100/summary.csv`、`one_macro.csv`、`comparison.mat`，两个版本分别保存在 `reference/` 和 `consistent/` 子目录，含 `cavity.png` 和 `bottom_corners.png`。独立验证覆盖：二维方程的 Gauss 积分组装、四个法向、壁面 Jacobian 有限差分、整体与凝聚解、八矩残差匹配、CIS 固定点、回传松弛公式及不修改 H。一般网格/速度独立性、外部文献精度和更高阶角涡仍需另测。
+
+2026-11-12，按用户指定只运行 delta=1000 的参考结构版 GSIS：`macroParam.kineticConsistency=false`、`macroParam.relaxation=1`，不加入内部弱残差修正和回传松弛；沿用 BGK 适配版稳定参数 `[1 delta delta delta]`，不等同于声子参考程序的三个 ST 数值。顶壁速度 0.01，双速度 32×32 referenceCubic，tol=1e-5。
+
+```matlab
+cfg=struct('cells',64,'meshStretch',3,'delta',1000,'tol',1e-5, ...
+    'macroParam',struct('kineticConsistency',false,'relaxation',1), ...
+    'outputDir',fullfile(pwd,'results','cavity_gsis_delta1000_reference'));
+r=monoGSISCavity2D2V(cfg);
+% 本次还运行了 cells=32、meshStretch=2 的较粗网格；两张网格都完成后：
+addpath('debug'); analyze_gsis_delta1000;
+```
+
+32×32/stretch2 用 9 步达到耦合停止条件，仍只有左右各一个角部椭圆型速度零点；64×64/stretch3 用 18 步，最小单元宽度约 5.1094e-4，识别到每侧两个候选角涡。较大底角涡中心约 (0.03620,0.03656)、(0.96380,0.03656)，逆时针；新出现的较小一对约 (0.001290,0.001249)、(0.998710,0.001249)，顺时针。`corner_multiscale.png` 直接放大原始速度场，不将重构流函数作为额外速度修正。候选小涡的位置与数量尚未通过进一步网格/速度/停止阈值核查。
+
+较细网格原 kinetic 相对残差仍为 2.2635e-2，而耦合相对残差为 6.5546e-6；原方程阈值未通过。流函数全域边通量投影误差约 6.14e-8，比第二级涡的重构流函数量级大，因此不能仅凭流函数图或一次双线性速度插值就确认更高阶涡的物理精度。结果单独保存于 `results/cavity_gsis_delta1000_reference/summary.csv`，两种网格子目录含原始分布、残差历史、候选中心及多尺度放大图。本次未运行 CIS，也未运行一致性修正版。
+
+### 五次映射空间网格的 delta=1000 角涡检查
+
+2026-11-12 启动、2026-11-13 复核：使用用户截图的五次坐标映射 `x(s)=10s^3-15s^4+6s^5`，两方向对称加密，保留 Q1 四边形、32×32 referenceCubic 速度网格、顶盖速度 0.01、Gray 默认稳定参数 `[1 1 1 1]`、完整回传及无内部残差修正。入口 `addpath('debug'); run_quintic_cavity_delta1000(64)`；独立原始速度复核及绘图为 `python3 debug/analyze_quintic_cavity_delta1000.py`。输出单独存入 `results/cavity_delta1000_quintic_20261112/`。
+
+新增可选参数 `meshMapping='quintic'`，默认仍为原 `tanh` 映射；`minIter` 默认为 0；`tolCoupled` 默认为 Inf，不改变默认宏观停机。此次显式设 `minIter=60`、`tolCoupled=1e-9`，不改变宏观更新公式及小分母分支。64×64 五次映射最小单元宽度 3.725849e-5，最大 0.02927781；原 tanh/stretch3 最小宽度约 5.10936e-4。第 24 步首次通过宏观更新阈值，但耦合残差约 0.04657；第 160 步才达到耦合相对残差 9.634259e-10，宏观更新 1.857143e-13，原方程相对残差仍为 0.005147204。
+
+单元中心原始 kinetic 速度的双线性插值，分别经 Newton 法和消元多项式求根复核，只识别到左右底角各两层候选角涡，没有第三层。左侧涡心约 (0.03609525,0.03654385)、(0.001181812,0.001181895)，右侧镜像；较大涡逆时针、较小涡顺时针。此结果仍有原 kinetic 方程缺口，不能据此证明物理上不存在第三层。流函数边通量投影误差约 1.9421e-8，不宜用更弱的重构流函数极值单独确认微涡。报告图为 `corner_multiscale_independent.png`，检查覆盖原有整体 DG 对照、五次映射平衡态、CIS/GMRES 一致性和显式耦合停机选项，日志为 `validation.log`。
+
+### 最新 Gray 参考程序的平台复测
+
+2026-11-11，直接从用户的 `GSIS_Gray_20261110.zip` 提取源码及原网格，在独立目录编译运行。保持原 Callaway 声子模型、200 三角形、P3、80×40 角度点、`tau_R=tau_N=0.01`、四壁热化温度 `[0,1,0,0]`、`ST=[1,1,1]`。它是热传导方腔，不是上述气体顶盖方腔。macOS 使用压缩包自带的 UMFPACK/PARDISO 接口；限制 OpenMP 至 4 线程、OpenBLAS 为 1 线程。输运迭代及宏观模块公式未改变，源码哈希与诊断补丁见 `results/gray_reference_platform/manifest.json` 和 `diagnostic_only.patch`。
+
+只读诊断分别将宏观回传源、当前 VDF 自身矩代入参考程序已有的完整输运残差例程；临时替换后逐值恢复源变量。另从压缩包编译未加诊断的原始主程序和输运模块，原版按默认 1e-5 在第 8 步停止，与诊断版前 8 步的宏观更新/总量最大差约 1.1e-19，确认诊断没有改变迭代轨迹。为看清平台，诊断版只延后停止到 100 步。
+
+GSIS 第 8 步宏观相对更新 5.0966e-6；第 100 步降至 2.7498e-15。原 kinetic 方程弱残差的绝对范数停在 1.091418e-5，除以初始原方程残差 2.421259e-2 后为 4.507647e-4；耦合方程同一归一化残差为 3.4572e-14。40→100 步原残差平台的相对变化仅约 6.5e-13。宏观源与 VDF 自身矩的组合相对 L2 差异保持 1.8081e-4（0.01808%）。原参考实现也存在耦合固定点与原 kinetic 离散方程不完全一致的现象。
+
+归一化必须区分：参考自带例程用 `sqrt(sum(w*R^2)/sum(w*((A*H)^2+b^2)))`，第 100 步原方程该值为 8.220845e-6；不是上面初态归一化的 4.507647e-4。绝对范数是参考弱残差的速度加权系数范数，不是我们气体代码的逆质量矩阵 L2 范数，因此平台数值不能直接跨模型比较。
+
+辅助纯 CIS 控制只跑到 500 步，尚未达到默认宏观停机阈值；其原/耦合残差一致，源与 VDF 矩的相对差约 8.4e-17。该运行用于核查诊断自洽，不作为收敛 CIS 参考解，也未计算相对收敛 CIS 的剖面误差。
+
+复现及分析：`python3 debug/run_gray_reference_platform.py --cis-max 500 --gsis-steps 100`、`python3 debug/check_gray_native_audit.py`、`python3 debug/analyze_gray_reference_platform.py`。结果为 `results/gray_reference_platform/reference_platform.png`、`summary.csv`、`summary.json`，原始日志及逐步残差分别在 `gsis/`、`cis/`，原版交叉核查在 `native_gsis/`。
 
 ## PDF BGK / Q1-DG solver
 
@@ -250,7 +383,10 @@ Poiseuille 用均匀 y 向驱动 `a`，源项 y 动量矩为 `a`，等效于参�
 | `cells`, `gap` | `64`, `1` | 均匀法向网格，范围 `[-gap/2,gap/2]` |
 | `delta` | `1` | 碰撞频率；本文件不额外定义 Kn 与 delta 的换算 |
 | `velocityOrder` | `[32 32]` | `[Nvx Nvy]`；默认法向正负半区各 16 点，流向 32 点，共 1024 个速度点；`halfLegendre` 要求 Nvx 为至少 32 的偶数 |
-| `normalQuadrature` | `'halfLegendre'` | 可选 `'hermite'`，此时允许奇数阶和零法向速度 |
+| `normalQuadrature` | `'halfLegendre'` | 可选 `'hermite'`（允许奇数阶和零法向速度）或参考程序的 `'referenceCubic'`（要求偶数阶） |
+| `normalCutoff` | `8` | `halfLegendre` / `referenceCubic` 法向截断；对齐参考三次映射时显式设为 `4` |
+| `tangentialQuadrature` | `'hermite'` | 可选 `'referenceCubic'`，将流向速度也改为零附近加密的有限区间求积 |
+| `tangentialCutoff` | `4` | 仅用于流向 `referenceCubic`；Hermite 不使用该截断 |
 | `wallVelocity` | `[]` | Couette 默认 `[-0.01 0.01]`，Poiseuille 默认 `[0 0]` |
 | `acceleration` | `[]` | Couette 默认 `0`，Poiseuille 默认 `0.01` |
 | `initial` | `0` | 标量、`2*cells × Nvelocity` 数组或 `@(x,vx,vy)` |
@@ -261,6 +397,47 @@ Poiseuille 用均匀 y 向驱动 `a`，源项 y 动量矩为 `a`，等效于参�
 | `reference` | `true` | 独立特征线积分方程 BGK 参考解及误差比较 |
 | `referenceCells`, `referenceOrder` | `1024`, `160` | 参考解物理网格数（向上调整为 cells 的整数倍）、正速度半区求积阶数 |
 | `outputDir` | `results/channel_1d2v` | 独立结果目录 |
+
+### 参考程序的三次映射速度网格（2026-11-09）
+
+`NonOscillatory/Velocity_Mesh.f90` 的 `VELM_FLAG=3` 使用均匀辅助坐标加三次映射；原 `control.in` 选择的正是这个分支。两个速度方向的截断均为 `a=4`、指数 `beta=3`。对每个方向：
+
+```text
+xi_i = (2*i - 1 - N)/(N - 1),  i=1,...,N
+v_i  = a*xi_i^3
+dv_i = 6*a/(N - 1)*xi_i^2
+```
+
+`xi_i` 等距，物理速度 `v_i` 在零附近加密；参考代码直接累加所有端点权重，没有再做梯形端点减半。移植到本求解器后，一维权重为 `dv_i*exp(-v_i^2)`，二维权重为两方向一维权重的乘积除以 `pi`，已含 Maxwell 分布。
+
+```matlab
+opt = struct('velocityOrder',[32 32], ...
+    'normalQuadrature','referenceCubic','normalCutoff',4, ...
+    'tangentialQuadrature','referenceCubic','tangentialCutoff',4, ...
+    'delta',0.1,'reference',false,'plot',false,'save',false);
+c = mono1D2V(opt);       % 分别运行两种流动的 CIS
+g = monoGSIS1D2V(opt);   % 相同网格的 GSIS
+```
+
+每个方向仍为 32 点，共 1024 点；最小非零速度为 `4/31^3≈0.000134269`，`|v|<0.1` 内有 10 点。旧法向 32 点半区 Legendre 的最小非零速度约为 `0.0423963`，该区间内只有 2 点。默认配置保留旧网格，以上选项显式启用新网格，旧结果不重标为新网格结果。
+
+运行 `addpath('debug'); check_reference_cubic_velocity` 可对照原网格、仅法向三次映射、双方向三次映射。使用相同 Nx64、32×32 速度和相对更新阈值 `1e-5`，双方向三次映射的 CIS 速度相对已保存独立 BGK 数值参考的偏差为：
+
+| δ | Couette：原网格 → 三次映射 | Poiseuille：原网格 → 三次映射 | CIS / GSIS 步数：Couette；Poiseuille |
+|---|---|---|---|
+| 0.1 | 4.3399% → 0.02646% | 0.63995% → 0.01503% | 5 / 5；8 / 8 |
+| 1 | 0.21183% → 0.004149% | 0.15793% → 0.003195% | 11 / 11；23 / 23 |
+| 10 | 0.01007% → 0.009548% | 0.03136% → 0.03125% | 82 / 47；251 / 66 |
+
+参考自身仍有数值误差；该对照同时改变了法向节点映射与截断范围，不能视为单独改变截断的研究。三次映射的 δ=0.1 Poiseuille CIS 流量 `Qp≈2.03272032`，相对文献 BGK 表值 `2.0327` 的有符号偏差约 `+0.00100%`。本次原网格回归保持六组结果不变，Maxwell 求积矩、碰撞不变量、零法向流和壁面质量通量检查通过。
+
+迭代次数未改变，速度求积的改善也没有消除耦合误差：δ=10 时 GSIS-CIS 的速度相对差为 Couette `0.08241%`、Poiseuille `0.31906%`。稳定参数、宏观混合、边界和停止准则均沿用原设置。结果保存在被 Git 忽略的 `results/reference_cubic_velocity32/`。
+
+完整流量检查：运行 `addpath('debug'); check_cubic_poiseuille_flowrates`，比较 δ=`[0.1 0.5 1 2 5 10]` 的旧网格和双方向三次映射网格。主表固定 Nx64、32×32 速度、相对更新 `1e-5`，同时记录 CIS/GSIS 流量、文献偏差和步数；另保存三次映射 CIS 的 `1e-9` 停机敏感性检查。三次映射主表为 `results/cubic_poiseuille_flowrates32/cubic_results.csv`，完整对照为同目录 `summary.csv`，严格停机表为 `strict_cis_1e9.csv`；这些生成文件由 Git 忽略。六组新网格 CIS 的最大文献偏差约 `0.08255%`，GSIS 约 `0.3062%`；CIS 收紧至 `1e-9` 后最大偏差约 `0.07258%`，两种停机结果不能混作同一张主表。
+
+六页报告的完整复测：MATLAB 运行 `addpath('debug'); run_cubic_channel_presentation_checks`，覆盖 δ=`[0.1 1 10]`、Couette/Poiseuille、Nx=`[32 64 128]` 的 18 组空间配置，以及 Nx64 下速度 `[32 32]`、`[64 32]`、`[128 32]`、`[128 64]` 的 24 组速度配置（两组集合共享 Nx64 的六个主算例），均运行 CIS/GSIS。保持相对更新 `1e-5`、稳定参数及混合方式不变。随后运行 `python3 debug/plot_channel_presentation.py --cubic` 和 `python3 debug/build_cubic_channel_results_pdf.py`；新图表位于 `output/channel_cubic_figures_20261109/`，当前六页 PDF 为 `output/pdf/1D2V_CIS_GSIS_全指标与停机敏感性_20261109.pdf`，第 6 页包含大小 δ 的停机敏感性和耦合一致性诊断。该工作流保留旧报告与旧数据，不显示独立 BGK 曲线。18 组空间对照的迭代次数与旧网格完全相同；当前 32×32 CIS 相对三次映射 128×64 的速度变化，在 δ=0.1 时为 Couette `0.02682%`、Poiseuille `0.01520%`，δ=1 时为 `0.0006264%`、`0.0004453%`，δ=10 时小于 `0.000007%`。这些是有限网格间差异，不代表相对精确解误差。
+
+停机敏感性：`addpath('debug'); check_cubic_stopping_residuals` 对六组主算例分别测试相对宏观更新阈值 `1e-5/1e-7/1e-9`，每次从 H=0 开始，统一使用各算例 CIS 首轮残差作为分母。δ=10 Poiseuille 的 CIS 原方程相对残差为 `2.969e-4 → 2.997e-6 → 3.026e-8`，GSIS 耦合方程为 `2.999e-4 → 2.787e-6 → 2.997e-8`，但 GSIS 对原 CIS 方程的相对残差为 `4.425e-3 → 4.346e-3 → 4.346e-3`。严格停机时，该原方程残差与混合源相对 kinetic 自身宏观量的源项缺口范数相符。因此收紧停止阈值可以降低迭代残差，却不能消除当前混合源耦合对原 CIS 方程造成的非零残差；不能统称“减小阈值没用”。完整数据在被 Git 忽略的 `results/cubic_stopping_residuals32/summary.csv`。
 
 默认采用 NonOscillatory 参考代码的单元宏观量相对更新判据，密度、温度和速度模三个指标的最大值小于 `tol=1e-5` 时停止。CIS 监测 kinetic 矩，GSIS 监测混合后源项矩；具体定义见下文“收敛诊断与验证”。方程残差和壁面诊断继续记录。设置 `stopCriterion='equation'` 并显式指定 `tol` 可恢复原先的绝对更新/方程/壁面联合停机条件。达到上限会警告并返回 `converged=false`。默认网格用于试算，尚不能代表速度和空间网格独立性；尤其稀薄流对法向零速附近的求积敏感。
 
@@ -333,6 +510,42 @@ r = runPoiseuilleDelta10;
 
 `delta_comparison.png` 给出原始速度、按各自最大单元平均速度归一化的剖面、剪切应力和收敛历史；速度曲线包含气体侧壁面迹。数值在 `delta_comparison.dat/.txt`，完整过程在 `run.log`；本次加密验证不覆盖其他参数。
 
+### 与 Su 等 2019 年 BGK Couette 表 1 的剪切量对照（非 SIS 复现）
+
+2026-11-12，比较来源为 W. Su, P. Wang, H. Liu, L. Wu, *Journal of Computational Physics* 378 (2019) 573-590，DOI `10.1016/j.jcp.2018.11.015`，表 1（印刷页 580，PDF 第 8 页）。使用表中每组第一行的 Jiang & Luo 高精度积分方程值，另存 `paper_table1.csv`。完整模型并非同一模型：论文写三维分子速度，当前求解器为二维分子速度；本次仅针对线性等温 BGK Couette 的剪切子问题。令相对 Maxwellian 的扰动 `H=2*vt*phi(x,vn)`，则密度、温度扰动为零，第三维高斯速度可以积分消去，两者均得到 `vn*d_x phi=delta*(U-phi)`、`U=int(phi*exp(-vn^2)/sqrt(pi))dvn`。在壁面和归一化匹配的条件下，只有这里对比的速度及剪切应力量可按该约化作基准对照，不能推广为完整热力学模型、其他流动或二维方腔的等价。本比较不使用 Shakhov 或 Boltzmann 分子势结果。
+
+算法也不同：论文使用专用于 Couette 的 SIS，先用平均剪切应力解标量宏观方程，再按式（25）直接修正分布函数的速度矩和剪切应力矩；当前程序用多宏观量 HDG 子问题，将宏观解回传碰撞源而不改写 H。因此这不是对论文 SIS 的复现，也不是 SIS 与 GSIS 的公平效率对照。本节的迭代步数只属于本程序的 CIS/GSIS 配对运行；三项数值接近文献不能单独证明当前 GSIS 耦合或固定点正确。
+
+间距 1、两壁速度 `[-1,1]`、无外力、完全漫反射、零初值。基准采用 128 个均匀 P1 单元、32×32 三次映射速度点、双向截断 ±4；分别测试单元宏观更新阈值 `1e-5/1e-8`。GSIS 显式设置全 1 稳定参数、`kineticConsistency=false`、全量宏观回传、不修改 H；此算例配置不改变 1D 求解器默认值。文献表 1 使用非均匀空间点、不同法向速度规则和逐点最大相对更新阈值 `1e-10`，故本文迭代次数只在本次 CIS/GSIS 之间比较，不要求复现论文 SIS 的次数。
+
+表 1 三列分别换算为 `uy_wall/(2*Uw)`、`d_x uy_center/(2*Uw)`、`-mean(Pxy)/(2*Uw)`；文献应力定义为 `P12=2*<vx*vy*H>/Uw`。壁面速度由完整边界分布（规定入射加单元出射）取矩，不能用仅弱满足入射条件的单元内端点速度代替；后者另存 `interiorEndpointVelocityOver2`。中心梯度取中心两侧 P1 单元内导数的平均。主要比较量均来自实际 kinetic H，宏观回传源另外记录。相对偏差为 `(本次数值-文献值)/文献值`，误差列取其绝对值，单位 %。
+
+128 单元、32×32 速度、tol=1e-8 的结果如下，三项误差均为 GSIS 相对文献：
+
+| delta | CIS/GSIS 步数 | 壁面速度误差 % | 中心梯度误差 % | 剪切应力误差 % |
+|---|---:|---:|---:|---:|
+| 0.01 | 5/5 | 0.14299 | 0.88152 | 0.00001951 |
+| 0.1 | 7/7 | 0.003088 | 0.061058 | 0.000001844 |
+| 1 | 17/13 | 0.004231 | 0.039719 | 0.002130 |
+| 10 | 143/14 | 0.025393 | 0.054714 | 0.023975 |
+| 100 | 6319/16 | 0.013431 | 0.034297 | 0.014136 |
+
+停止阈值的影响：delta=100 时，CIS 中心梯度误差由 tol=1e-5 下 1.3103% 降至 tol=1e-8 下 0.0004349%；同样改变阈值，GSIS 的梯度误差为 0.034682%/0.034297%，原 kinetic 相对残差为 7.8555e-4/7.8616e-4。这表明 CIS 的早停偏差和未加内部一致性修正 GSIS 的残留偏差不同，不能用统一停机阈值代替原方程检查。
+
+512 单元、64×32 速度、tol=1e-8 的 GSIS，五个 delta 的三项误差最大值为 0.02043%；delta=100 的壁面速度/中心梯度/剪切应力误差为 0.006555%/0.012528%/0.006665%，但原 kinetic 相对残差仍为 2.3847e-4，尚不能称为充分满足原离散 kinetic 方程。单因素核查：delta=0.01 固定 128 单元，仅把法向速度从 32 改为 64，GSIS 中心梯度误差由 0.88152% 降为 0.016481%；delta=100 固定 32×32 速度，把单元数从 128 改为 512，梯度误差由 0.034297% 降为 0.012528%，在 512 单元下继续改为 64×32 几乎不再改变这一项。它们分别显示零速附近积分分辨率与空间/宏观离散的影响。
+
+复现命令（共 29 次实际求解）：
+
+```matlab
+addpath('debug');
+compare_su2019_bgk_couette('baseline');
+compare_su2019_bgk_couette('refinement');
+compare_su2019_bgk_couette('isolation');
+plot_su2019_bgk_couette;
+```
+
+结果位于 `results/su2019_bgk_couette/`：`baseline_summary.csv`、`refinement_summary.csv`、`isolation_summary.csv` 含文献值、实际值、带符号及绝对相对偏差、迭代数与原/耦合残差；各组 MAT 保存完整 H。`provenance.json` 记录定义与原 PDF 校验值。`paper_comparison.png` 比较三项文献相对误差，`stopping_and_residual.png` 分开显示迭代次数和原方程残差；图例 V 表示法向×切向速度点数。没有修改生产求解器公式。
+
 ## 1D2V BGK / HDG 的参考代码式 GSIS
 
 当前宏观离散和耦合按桌面 `NonOscillatory/Synthetic_Acceleration.f90` 的方式适配到 **1D2V BGK**。保留二维 Gaussian 矩和热流系数，未照搬三维 Shakhov 的 3/2、4/3、5/4 等系数。按用户要求，稳定参数保持 **`[1 delta delta delta]`**，不采用参考 Fortran 当前启用的常数参数。
@@ -391,18 +604,21 @@ param = struct('stabilization',[1 delta delta delta]); % 默认值保持不变
 
 ### 高阶项、壁面和外层回传
 
-适配器从 H 提取 Rxx/Rxy/RT，使用单元内部导数 `M*Rx=G'*R`，对应参考 Fortran 的体积分导数；不加入 kinetic 迎风面项。`project_hot_derivatives_1d` 的 weak 模式仍可独立使用，但当前适配器明确选择 strong/interior 模式。
+2026-11-10 更新：适配器从 H 提取 Rxx/Rxy/RT，使用弱导数 `M*Rx=-G*R+[-Rhat_left;Rhat_right]`。先逐速度构造完整 kinetic 迎风迹，再取高阶矩；包含内部面跳跃和两侧漫反射入射分布。
 
-宏观壁面取相邻单元 `H([1 end],:)` 的矩，不使用完整漫反射数值迹：
+宏观壁面采用用户提供的 `GSIS_Gray_20261110` 中的仿射通量结构，系数改为当前 BGK 的离散速度积分：
 
 ```text
-p_hat  = rho_kin,interior + T_kin,interior
-ux_hat = 0
-uy_hat = uy_kin,interior
-T_hat  = T_kin,interior
+F_HDG(U,Uhat) = F_kinetic(H) + Jwall*(U-Ukinetic)
+U = [p ux uy T]
+F_kinetic = integral (v*n)*[1, 2*vx, 2*vy, v^2-2]*Htrace*M0 dv
 ```
 
-kinetic 本身继续使用完全漫反射边界；宏观边界保留气体切向滑移。第一轮 kinetic sweep 后，适配器可直接调用：
+`F_kinetic` 包含全部出射与漫反射入射速度。`Jwall` 使用与碰撞项相同的离散 Gram 平衡投影，对出射分布作宏观线性化，同时调整入射壁面密度以保持零法向质量通量；壁速和壁温固定。所有守恒方程保留，增加体平均密度扰动为零的约束，消除闭合通道的零空间。宏观面变量由通量方程求出，不直接指定为 kinetic 单元矩。
+
+仅迁移上述壁面和高阶导数仍会留下内部 HDG 稳定通量与 kinetic 迎风通量的离散差异。当前另外使用 `kinetic_hdg_consistency_1d2v` 冻结七个矩的弱载荷修正：在当前 H 对应的宏观状态处，四个守恒残差等于原 kinetic-DG 残差的矩，三个应力/热流辅助残差等于对应矩的负值。宏观算子及稳定参数保持不变。因而原 kinetic 残差为零时，宏观修正也为零。这是 BGK 适配时增加的一致性处理，不是对 Gray 源码的逐项照搬。
+
+第一轮 kinetic sweep 后，适配器可直接调用：
 
 ```matlab
 [macro,aux,hdg,hot] = gsis_macro_from_kinetic_1d2v(cis.poiseuille);
@@ -413,22 +629,41 @@ kinetic 本身继续使用完全漫反射边界；宏观边界保留气体切向
 完整 GSIS 每轮执行：由独立保存的 Qsource 组装碰撞增益，解 kinetic H，取 Qkin，解宏观方程，再更新下轮源项：
 
 ```text
-Kn_cell = sqrt(pi)/(2*delta*dx)
-omega   = min(1,1/Kn_cell)
-Qsource = Qkin + omega*(Qmacro-Qkin)
+Qsource = Qmacro
 ```
 
-宏观步骤不直接修正 H。保留原有闭合通道的密度均值为零规范，并对 Qsource 的密度均值作同样约束。`r.nodalMoments/cellMoments/flowRate` 始终来自实际 kinetic H；`r.synthetic` 另外保存宏观解、辅助量、面变量、高阶项、omega 和 `sourceMoments`。自定义稳定参数可通过 `options.macroParam.stabilization` 传入。
+宏观步骤不直接修正 H。保留原有闭合通道的密度均值为零规范，并对 Qsource 的密度均值作同样约束。`r.nodalMoments/cellMoments/flowRate` 始终来自实际 kinetic H；`r.synthetic` 另外保存宏观解、辅助量、面变量、高阶项、兼容字段 `omega=1` 和 `sourceMoments`。自定义稳定参数可通过 `options.macroParam.stabilization` 传入。
 
 ### 收敛诊断与验证
 
-默认停机与参考 Fortran 的 `Calculate_Residual_rho_T_U` 对齐。每个单元计算 `R_i=int(1+rho_pert)dx`、`T_i=int(1+T_pert)dx`、`V_i=hypot(int(ux)dx,int(uy)dx)`；对这三个单元向量分别取 `norm(A_new-A_old)/norm(A_new)`，最大值小于 `1e-5` 时停止。CIS 使用 Qkin，GSIS 使用混合后的 Qsource，与参考代码的宏观量回传阶段一致。首次 OLD 取静止参考气体：密度/温度为单元长度，速度为零。零分母且无变化记为零，有变化记为 Inf。实现见 `reference_macro_update_1d2v.m`。
+默认停机与参考 Fortran 的 `Calculate_Residual_rho_T_U` 对齐。每个单元计算 `R_i=int(1+rho_pert)dx`、`T_i=int(1+T_pert)dx`、`V_i=hypot(int(ux)dx,int(uy)dx)`；对这三个单元向量分别取 `norm(A_new-A_old)/norm(A_new)`，最大值小于 `1e-5` 时停止。CIS 使用 Qkin，GSIS 使用回传的 Qsource。首次 OLD 取静止参考气体：密度/温度为单元长度，速度为零。零分母且无变化记为零，有变化记为 Inf。实现见 `reference_macro_update_1d2v.m`。
 
-GSIS 的 `diagnostics.coupled` 是将当前混合源 Qsource 代入 kinetic DG 方程得到的残差；`diagnostics.kinetic` 则使用 Qkin 自身构造碰撞源，表示原 CIS 方程残差。默认模式下这些残差及壁面诊断只记录，不参与停机；因此宏观量更新小于 tol 不代表方程残差也小于 tol。`stopCriterion='equation'` 恢复原来的 kinetic 矩更新、源项更新、耦合残差、壁面残差、壁面质量通量和密度均值误差联合判据。历史文件保留原有列，在最后追加四列参考相对更新指标；`r.convergence` 记录所用判据、阈值和最终指标。
+GSIS 的 `diagnostics.coupled` 是将当前回传源 Qsource 代入 kinetic DG 方程得到的残差；`diagnostics.kinetic` 则使用 Qkin 自身构造碰撞源，表示原 CIS 方程残差。默认模式下这些残差及壁面诊断只记录，不参与停机；因此宏观量更新小于 tol 不代表方程残差也小于 tol。`stopCriterion='equation'` 恢复原来的 kinetic 矩更新、源项更新、耦合残差、壁面残差、壁面质量通量和密度均值误差联合判据。历史文件保留原有列，在最后追加四列参考相对更新指标；`r.convergence` 记录所用判据、阈值和最终指标。
 
 `runGSISChannelComparison` 的结果表记录完整外层迭代次数、两种残差、速度剖面和流量相对 CIS 的差异、实际稳定参数，以及停机判据、阈值和最终相对更新。相同宏观量停机标准并不保证最终离散解完全相同，也不表示相同运行时间。`demo_gsis_macro_1d2v` 仍是 CIS 收敛后仅执行一次宏观求解的子模块示例，其步数不是完整 GSIS 步数。
 
-2026-11-05，统一参考停机标准后的实测结果（64 单元、32×32 速度点、tol=1e-5，稳定参数仍为 `[1 delta delta delta]`）：
+2026-11-10 当前耦合实测：64 个 P1 空间单元，双向 32 点 referenceCubic（截断 ±4、零附近加密），零初值，Couette 壁速 ±0.01、Poiseuille 加速度 0.01，稳定参数 `[1 delta delta delta]`。相同参考宏观更新阈值 `1e-5`：
+
+| 流动 | delta | CIS 步数 | GSIS 步数 | kinetic 速度相对 CIS 的 L2 差异 |
+|---|---:|---:|---:|---:|
+| Couette | 0.1 | 5 | 5 | 0.00000219% |
+| Poiseuille | 0.1 | 8 | 5 | 0.0000599% |
+| Couette | 1 | 11 | 9 | 0.0002089% |
+| Poiseuille | 1 | 23 | 8 | 0.001491% |
+| Couette | 10 | 82 | 8 | 0.008740% |
+| Poiseuille | 10 | 251 | 14 | 0.03022% |
+
+阈值收紧至 `1e-11` 时，delta=10 的 CIS/GSIS 步数分别为 Couette 204/20、Poiseuille 678/30；GSIS 原 kinetic 方程绝对残差分别为 `1.3595e-13`、`1.5716e-13`，除以各自共同首步 CIS 残差后为 `9.3374e-12`、`1.1728e-11`。对应 kinetic 速度差异为 `7.9167e-9%`、`2.9895e-8%`。在所测阈值范围内，未再观察到原有残差平台。这里比较同一离散方程的固定点和迭代步数，不代表已获得文献或连续解精度、运行时间加速比或网格无关性。
+
+复现：`addpath('debug'); check_gray_gsis_coupling_1d2v`。原始数据与完整历史位于 `results/gray_consistent_coupling32/summary.csv`、`comparison.mat`；收敛 CIS 后单步宏观检查位于 `converged_cis_one_macro.csv`。`check_gray_gsis_consistency_1d2v` 独立检查漫反射 Jacobian、完整 kinetic 残差的七个矩、以及带壁面和密度约束的整体线性系统。
+
+关闭内部弱残差修正的对照：`check_gray_gsis_coupling_1d2v(false)`，结果单独保存于 `results/gray_uncorrected_coupling32`，使用相同的壁面通量、弱高阶导数、完整宏观回传及稳定参数。单次调用可设置 `options.macroParam.kineticConsistency=false`；默认仍为 true。脚本核查关闭时宏观右端只含原有体源及高阶项，额外弱载荷严格为零。
+
+关闭时，1e-5 下 Couette 的 CIS/GSIS 步数为 5/5、11/9、82/8，速度差异为 0.000161%、0.01479%、0.1007%；Poiseuille 为 8/5、23/8、251/13，速度差异为 0.02178%、0.1177%、0.3165%（delta 依次为 0.1/1/10）。收紧到 1e-11 后，delta=10 的 Couette/Poiseuille 速度差异仍为 0.10848%/0.28846%，原 kinetic 方程绝对残差为 2.4570e-5/1.8028e-4，而耦合残差为 6.8869e-13/2.0398e-12。因而壁面迁移本身能减少迭代步数，但没有消除原离散方程的残差平台。
+
+稳定参数对照：`check_gray_gsis_coupling_1d2v(false,[1 1 1 1])` 仅在本次测试中覆盖惩罚系数，保持求解器默认值不变，结果保存于 `results/gray_uncorrected_coupling32_S1_1_1_1`。当前切向动量通量为 `-Ly/delta*n+s_uy*(uy-uy_hat)`，代入 `sigma_xy=-Ly/delta` 后，惩罚项仍为 `s_uy*(uy-uy_hat)`，因此默认 `s_uy=delta` 没有被辅助变量缩放抵消。全 1、关闭内部修正、阈值 1e-11 时，delta=10 Couette/Poiseuille 的 GSIS 步数为 20/28，速度相对 CIS 差异为 0.08779%/0.22934%，原 kinetic 绝对残差为 2.3630e-5/1.7342e-4。相比 `[1 delta delta delta]` 偏差减小，但残差平台仍存在。
+
+下列为 2026-11-05 的历史实现结果（旧内部导数、单元矩壁面和混合回传），不代表当前耦合：
 
 | 流动 | delta | CIS 步数 | GSIS 步数 | GSIS 单元平均速度相对 CIS 的 L2 差异 |
 |---|---:|---:|---:|---:|
@@ -441,20 +676,19 @@ GSIS 的 `diagnostics.coupled` 是将当前混合源 Qsource 代入 kinetic DG �
 
 ```matlab
 addpath('debug');
-report_hdg_after_converged_cis_1d2v % CIS 收敛后只解一次 HDG，直接比较，不乘 omega
-audit_macro_wall_reference_1d2v    % 对照参考壁面数据及边界施加
-audit_hdg_bulk_interface_1d2v      % 独立高阶项、面公式和冻结宏观问题解析积分
-check_hdg_one_step_refinement_1d2v % 原始单步差异的 32/64/128/256 单元检查
+report_hdg_after_converged_cis_1d2v % CIS 收敛后只解一次当前 HDG，直接比较
 check_hdg_macro_1d2v          % 制造解、缓存、混合边界、解析流、二阶精度
 report = audit_hdg_weak_form_1d2v; % 独立积分组装、通量、界面公式、2V 系数
-check_gsis_channel_1d2v      % 不修改 H、下轮使用混合源、平移平衡态、停机检查
+check_gsis_channel_1d2v      % 不修改 H、下轮使用完整宏观源、平移平衡态、停机检查
+check_gray_gsis_consistency_1d2v % 壁面 Jacobian、七矩残差、宏观整体组装
+check_gray_gsis_coupling_1d2v % 0.1/1/10，三档停机阈值，完整 CIS/GSIS 对比
 check_channel_1d2v           % 原 CIS 对整体 kinetic DG 解、物理和输出回归
 check_reference_stopping_1d2v % 参考宏观相对更新、源项监测、零分母与默认阈值
 ```
 
-独立核查的参考矩阵由三点 Gauss 积分逐基向量生成，不调用生产 F/G/M 或 Kronecker 装配。涵盖非均匀网格、delta=0.07/1/7/1000、默认及自定义稳定参数、法向/切向驱动、界面平均/跳跃公式和二维 Gaussian 恒等式。`fixed_point_audit.csv` 是将 kinetic 解和指定的测试面变量代入宏观方程的诊断，不能把这些测试面变量等同于 HDG 自由求出的内部面变量；参考式单元内部高阶导数下，辅助残差也不必为零。对完整耦合的判断应结合实际收敛、与 CIS 的稳态偏差和网格加密结果。
+独立核查的参考矩阵由三点 Gauss 积分逐基向量生成，不调用生产 F/G/M 或 Kronecker 装配。涵盖非均匀网格、delta=0.07/1/7/1000、默认及自定义稳定参数、法向/切向驱动、界面平均/跳跃公式和二维 Gaussian 恒等式。当前 `fixed_point_audit.csv` 将 kinetic 解及通量相容的基准面变量代入带一致性载荷的宏观弱式，独立核查七矩残差匹配；不要求内部 HDG 通量逐面等于 kinetic 通量。`audit_macro_wall_reference_1d2v`、`audit_hdg_bulk_interface_1d2v`、`check_hdg_one_step_refinement_1d2v` 用于历史单元矩壁面/内部高阶导数数据分析，未迁移至当前仿射通量边界。
 
-以下保留 2026-11-03 的严格方程停机历史结果：64 空间单元、32×32 速度点、tol=1e-10。现在复现须显式设置 `stopCriterion='equation'`、`tol=1e-10`；严格离散核查脚本也显式使用方程判据。
+以下保留 2026-11-03 的严格方程停机历史结果：64 空间单元、32×32 速度点、tol=1e-10。复现旧数值须使用当时的实现，仅调整当前代码的停机参数不会恢复旧结果。
 
 | 流动 | delta | CIS 步数 | GSIS 步数 | GSIS 单元平均速度相对 CIS 的 L2 差异 |
 |---|---:|---:|---:|---:|

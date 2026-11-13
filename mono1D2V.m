@@ -12,13 +12,17 @@ function result = mono1D2V(options)
 %   Both walls are isothermal (T=1), fully diffuse, with tangential speeds
 %   wallVelocity=[left,right] along y. Collision gain and wall density lag.
 %   A discrete Gram projection conserves all four collision invariants in CIS.
-%   iterationMethod='GSIS' uses the reference-style HDG mixed source, without
+%   iterationMethod='GSIS' uses the full-state HDG macro source, without
 %   lifting H. monoGSIS1D2V is the separate entry point for that coupling.
 %   Default stopping: reference cell-macro relative update < 1e-5, evaluated
-%   on mixed source moments in GSIS. Equation residuals remain diagnostics.
+%   on returned macro source moments in GSIS. Equation residuals remain diagnostics.
 %   stopCriterion='equation' restores the earlier residual/update checks.
 %   Independent reference: channel1D2VReference.m (disable with reference=false).
-%   normalCutoff sets the halfLegendre vx interval [-normalCutoff,normalCutoff].
+%   normalCutoff sets the finite vx interval for halfLegendre/referenceCubic.
+%   referenceCubic reproduces NonOscillatory VELM_FLAG=3 (beta=3):
+%   r=mono1D2V(struct('normalQuadrature','referenceCubic','normalCutoff',4, ...
+%       'tangentialQuadrature','referenceCubic','tangentialCutoff',4));
+%   This keeps 32x32 points, with cubic clustering near zero in both velocities.
 %   Pure Couette plotting also uses plotCouette1D2V.m for physical checks.
 %   No Fluent mesh, monoBGKDG, monoCIS or monoNS dependency.
 %
@@ -40,6 +44,7 @@ root = fileparts(mfilename('fullpath'));
 cfg = struct('flow','both','cells',64,'gap',1,'delta',1, ...
     'iterationMethod','CIS','macroParam',struct, ...
     'velocityOrder',[32 32],'normalQuadrature','halfLegendre','normalCutoff',8, ...
+    'tangentialQuadrature','hermite','tangentialCutoff',4, ...
     'wallVelocity',[],'acceleration',[], ...
     'reference',true,'referenceCells',1024,'referenceOrder',160, ...
     'initial',0,'maxIter',30000,'tol',1e-5,'stopCriterion','reference', ...
@@ -55,17 +60,24 @@ cfg.flow = char(validatestring(cfg.flow,{'both','Couette','Poiseuille'}));
 cfg.iterationMethod = char(validatestring(cfg.iterationMethod,{'CIS','GSIS'}));
 cfg.stopCriterion = char(validatestring(cfg.stopCriterion,{'reference','equation'}));
 assert(isstruct(cfg.macroParam) && isscalar(cfg.macroParam),'macroParam must be a scalar struct.');
-cfg.normalQuadrature = char(validatestring(cfg.normalQuadrature,{'halfLegendre','hermite'}));
+cfg.normalQuadrature = char(validatestring(cfg.normalQuadrature,{'halfLegendre','hermite','referenceCubic'}));
+cfg.tangentialQuadrature = char(validatestring(cfg.tangentialQuadrature,{'hermite','referenceCubic'}));
 for name = {'cells','maxIter','checkEvery','reportEvery','referenceCells','referenceOrder'}
     validateattributes(cfg.(name{1}),{'numeric'},{'scalar','integer','positive','finite'});
 end
-for name = {'gap','delta','tol','normalCutoff'}
+for name = {'gap','delta','tol','normalCutoff','tangentialCutoff'}
     validateattributes(cfg.(name{1}),{'numeric'},{'scalar','real','positive','finite'});
 end
 validateattributes(cfg.velocityOrder,{'numeric'},{'vector','numel',2,'integer','>=',3,'finite'});
 if strcmp(cfg.normalQuadrature,'halfLegendre')
     assert(mod(cfg.velocityOrder(1),2)==0 && cfg.velocityOrder(1)>=32, ...
         'halfLegendre requires an even Nvx >= 32 (half the points per half-space).');
+end
+if strcmp(cfg.normalQuadrature,'referenceCubic')
+    assert(mod(cfg.velocityOrder(1),2)==0,'referenceCubic requires an even Nvx to avoid zero-weight nodes.');
+end
+if strcmp(cfg.tangentialQuadrature,'referenceCubic')
+    assert(mod(cfg.velocityOrder(2),2)==0,'referenceCubic requires an even Nvy to avoid zero-weight nodes.');
 end
 assert(cfg.referenceOrder>=4,'referenceOrder must be >= 4.');
 if ~isempty(cfg.wallVelocity)
@@ -97,7 +109,8 @@ edges = linspace(-cfg.gap/2,cfg.gap/2,N+1)';
 x = reshape([edges(1:end-1),edges(2:end)]',[],1);
 mesh = struct('count',N,'edges',edges,'nodes',x, ...
     'center',(edges(1:end-1)+edges(2:end))/2,'dx',dx);
-v = velocity_grid(cfg.velocityOrder,cfg.normalQuadrature,cfg.normalCutoff);
+v = velocity_grid(cfg.velocityOrder,cfg.normalQuadrature,cfg.normalCutoff, ...
+    cfg.tangentialQuadrature,cfg.tangentialCutoff);
 op = operators(N,dx,v,cfg.delta);
 ref = [];
 if cfg.reference
@@ -123,7 +136,7 @@ previousReference=[diff(edges),diff(edges),zeros(N,1)];
 macroParam=cfg.macroParam; synthetic=struct;
 if useGSIS
     macroParam.cache=hdg_precompute_p1(mesh,cfg.delta,macroParam);
-    omega=repelem(min(1,2*cfg.delta*diff(edges)/sqrt(pi)),2);
+    omega=ones(2*N,1);
 end
 if cfg.plot
     monitor = figure('Name',['1D2V ',cfg.flow],'Color','w','Position',[100 100 1100 720]);
@@ -133,12 +146,14 @@ fprintf('\n1D2V %s %s: P1-DG, %d cells, %dx%d velocities, gap=%g, delta=%g\n', .
     cfg.iterationMethod,cfg.flow,N,cfg.velocityOrder,cfg.gap,cfg.delta);
 fprintf('x-normal mesh; wall uy=[%g %g], y-acceleration=%g; fully diffuse walls.\n', ...
     cfg.wallVelocity,cfg.acceleration);
-fprintf('Normal quadrature: %s.\n',cfg.normalQuadrature);
+fprintf('Velocity quadrature: normal %s; tangential %s.\n',cfg.normalQuadrature,cfg.tangentialQuadrature);
 fprintf('Stopping: %s, tolerance %.3e.\n',cfg.stopCriterion,cfg.tol);
 fprintf(' step       moment update     kinetic residual    wall residual      wall mass flux\n');
 if useGSIS
-    fprintf('GSIS S=[%s], omega=[%.4g,%.4g]; additional column: coupled residual\n', ...
-        num2str(macroParam.cache.stabilization),min(omega),max(omega));
+    consistency=true;
+    if isfield(macroParam,'kineticConsistency'); consistency=logical(macroParam.kineticConsistency); end
+    fprintf('GSIS S=[%s], full macro source, kinetic consistency=%d; additional column: coupled residual\n', ...
+        num2str(macroParam.cache.stabilization),consistency);
 end
 timer = tic;
 for iter = 1:cfg.maxIter
@@ -158,9 +173,11 @@ for iter = 1:cfg.maxIter
     if useGSIS
         state=struct('mesh',mesh,'H',H,'velocity',v,'config',cfg);
         [macro,aux,hdg,hot]=gsis_macro_from_kinetic_1d2v(state,macroParam);
-        sourceQ=Q+omega.*(macro.nodal-Q);
+        sourceQ=macro.nodal;
         sourceQ(:,1)=sourceQ(:,1)-mean(sourceQ(:,1));
-        synthetic=struct('macro',macro,'aux',aux,'hdg',hdg,'hot',hot,'omega',omega);
+        synthetic=struct('macro',macro,'aux',aux,'hdg',hdg,'hot',hot,'omega',omega, ...
+            'coupling','fullStateKineticFluxConsistent');
+        if ~hot.consistency.enabled; synthetic.coupling='fullStateKineticFlux'; end
     else
         sourceQ=Q;
     end
@@ -244,9 +261,11 @@ if ~converged
 end
 end
 
-function v = velocity_grid(order,normalQuadrature,normalCutoff)
+function v = velocity_grid(order,normalQuadrature,normalCutoff,tangentialQuadrature,tangentialCutoff)
 if strcmp(normalQuadrature,'hermite')
     [x,wx] = hermite_rule(order(1));
+elseif strcmp(normalQuadrature,'referenceCubic')
+    [x,wx] = reference_cubic_rule(order(1),normalCutoff);
 else
     % Separate half spaces resolve the steep behavior near vx=0 at walls.
     % Include M0's normal Gaussian in the weights; default cutoff is 8.
@@ -256,18 +275,35 @@ else
     w = normalCutoff*V(1,idx)'.^2.*exp(-s.^2);
     x = [-flipud(s);s]; wx = [flipud(w);w];
 end
-[z,wz] = hermite_rule(order(2));
+if strcmp(tangentialQuadrature,'referenceCubic')
+    [z,wz] = reference_cubic_rule(order(2),tangentialCutoff);
+else
+    [z,wz] = hermite_rule(order(2));
+end
 [xx,zz] = meshgrid(x,z); w = wz*wx'/pi;
 v.vx = xx(:); v.vy = zz(:); v.weight = w(:);
 v.speed2 = v.vx.^2+v.vy.^2;
 v.basis = [ones(numel(xx),1),v.vx,v.vy,v.speed2-1];
 v.moment = v.weight.*v.basis; v.gram = v.basis'*v.moment;
-v.normal = x; v.group = cell(numel(x),1);
+v.normal = x; v.normalWeight=wx;
+v.tangential=z; v.tangentialWeight=wz;
+v.group = cell(numel(x),1);
 for k = 1:numel(x); v.group{k} = (k-1)*numel(z)+(1:numel(z)); end
 v.inLeft = v.vx>0; v.inRight = v.vx<0;
 v.halfFlux = [sum(v.weight.*max(v.vx,0)),sum(v.weight.*max(-v.vx,0))];
 v.normalQuadrature = normalQuadrature;
 v.normalCutoff = normalCutoff;
+v.tangentialQuadrature = tangentialQuadrature;
+v.tangentialCutoff = tangentialCutoff;
+end
+
+function [x,w] = reference_cubic_rule(n,cutoff)
+% NonOscillatory/Velocity_Mesh.f90, VELM_FLAG=3, beta=3.
+% The source sums all endpoint weights (no trapezoidal endpoint halving).
+% It multiplies DC by VDF_EQ later; this solver includes exp(-x^2) here.
+xi = (2*(1:n)'-1-n)/(n-1);
+x = cutoff*xi.^3;
+w = (6*cutoff/(n-1))*xi.^2.*exp(-x.^2);
 end
 
 function [x,w] = hermite_rule(n)

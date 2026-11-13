@@ -4,6 +4,7 @@ Run debug/run_channel_presentation_checks.m in MATLAB first, then this script.
 Numerical solver and reference stopping are unchanged by plotting.
 """
 from pathlib import Path
+import argparse
 import csv
 import html
 import json
@@ -18,8 +19,11 @@ import numpy as np
 from scipy.io import loadmat
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / 'results/channel_presentation_20261109'
-OUT = ROOT / 'output/channel_figures_20261109'
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--cubic',action='store_true',help='Plot the separate reference-cubic retest dataset.')
+CUBIC=parser.parse_args().cubic
+DATA = ROOT / ('results/channel_cubic_presentation_20261109' if CUBIC else 'results/channel_presentation_20261109')
+OUT = ROOT / ('output/channel_cubic_figures_20261109' if CUBIC else 'output/channel_figures_20261109')
 OUT.mkdir(parents=True, exist_ok=True)
 CSV = OUT / 'data'
 CSV.mkdir(exist_ok=True)
@@ -97,12 +101,16 @@ for case in base:
        (.1,'couette'):14,(.1,'poiseuille'):15}[(delta,flow)]
     x = np.asarray(c['mesh']['center'])
     u, ug = c['cellMoments'][:, 2], g['cellMoments'][:, 2]
-    ub = case['reference']['cellVelocity']
+    reference=case.get('reference',None)
+    has_reference=isinstance(reference,dict) and 'cellVelocity' in reference
+    ub=reference['cellVelocity'] if has_reference else None
     h = c['config']['gap']/64
     absolute, relative = metric(ug, u, h)
     _, shear_relative = metric(g['shearStress'], c['shearStress'], h)
-    _, c_ref_error = metric(u, ub, h)
-    _, g_ref_error = metric(ug, ub, h)
+    c_ref_error=g_ref_error=float('nan')
+    if has_reference:
+        _, c_ref_error = metric(u, ub, h)
+        _, g_ref_error = metric(ug, ub, h)
     denominator = max(abs(u))
     rel_profile = 100*abs(ug-u)/denominator
     row = dict(flow=flow, delta=delta, cells=64, Nvx=32, Nvy=32,
@@ -111,7 +119,7 @@ for case in base:
                absoluteVelocityL2=absolute, maximumAbsoluteVelocityDifference=float(max(abs(ug-u))),
                relativeVelocityL2Percent=relative, relativeShearL2Percent=shear_relative,
                cisVsIndependentBGKPercent=c_ref_error, gsisVsIndependentBGKPercent=g_ref_error,
-               independentBGKSelfRefinementPercent=100*case['reference']['selfRelativeL2'],
+               independentBGKSelfRefinementPercent=100*reference['selfRelativeL2'] if has_reference else float('nan'),
                cisFlowRate=float(c['flowRate']), gsisFlowRate=float(g['flowRate']),
                absoluteFlowRateDifference=abs(g['flowRate']-c['flowRate']),
                relativeFlowDifferencePercent=(100*abs(g['flowRate']-c['flowRate'])/abs(c['flowRate'])
@@ -123,11 +131,17 @@ for case in base:
                gsisRelativeMacroUpdate=float(g['convergence']['referenceMacroUpdate']))
     summary.append(row)
     rows = [dict(x=float(x[j]), cisUy=float(u[j]), gsisUy=float(ug[j]),
-                 independentBGKUy=float(ub[j]), signedGSISMinusCIS=float(ug[j]-u[j]),
+                 independentBGKUy=float(ub[j]) if has_reference else float('nan'), signedGSISMinusCIS=float(ug[j]-u[j]),
                  absoluteGSISMinusCIS=float(abs(ug[j]-u[j])),
                  globallyNormalizedAbsDifferencePercent=float(rel_profile[j]),
-                 cisMinusIndependentBGK=float(u[j]-ub[j]),
-                 gsisMinusIndependentBGK=float(ug[j]-ub[j])) for j in range(len(x))]
+                 cisMinusIndependentBGK=float(u[j]-ub[j]) if has_reference else float('nan'),
+                 gsisMinusIndependentBGK=float(ug[j]-ub[j]) if has_reference else float('nan')) for j in range(len(x))]
+    if CUBIC:
+        for column in ['cisVsIndependentBGKPercent','gsisVsIndependentBGKPercent','independentBGKSelfRefinementPercent']:
+            row.pop(column)
+        for profile in rows:
+            for column in ['independentBGKUy','cisMinusIndependentBGK','gsisMinusIndependentBGK']:
+                profile.pop(column)
     write_csv(f'{flow}_delta{tag}_profiles.csv', rows)
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.9))
     ax[0].plot(x, u, color=BLUE, label='CIS')
@@ -281,6 +295,23 @@ for case in base:
                             stopCriterion='reference',stopTolerance=1e-5,Qp=float(qp),paperBGK=paper[delta],
                             signedAbsoluteDifference=float(qp-paper[delta]),
                             signedRelativeDifferencePercent=100*(qp/paper[delta]-1)))
+if CUBIC:
+    # Additional three deltas have the same grid/stopping and were tested
+    # separately in the complete six-delta flow-rate comparison.
+    with (ROOT/'results/cubic_poiseuille_flowrates32/cubic_results.csv').open() as stream:
+        flow_rows=list(csv.DictReader(stream))
+    for row in flow_rows:
+        delta=float(row['delta'])
+        for method in ['CIS','GSIS']:
+            qp=float(row[method.lower()+'Qp'])
+            match=[r for r in current if r['delta']==delta and r['method']==method]
+            if match:
+                assert abs(match[0]['Qp']-qp)<1e-12
+            else:
+                current.append(dict(delta=delta,method=method,cells=64,Nvx=32,Nvy=32,
+                    stopCriterion='reference',stopTolerance=1e-5,Qp=qp,paperBGK=paper[delta],
+                    signedAbsoluteDifference=qp-paper[delta],signedRelativeDifferencePercent=100*(qp/paper[delta]-1)))
+    current.sort(key=lambda r:(r['delta'],r['method']))
 write_csv('current_literature_comparison.csv',current)
 
 fig,ax=plt.subplots(1,3,figsize=(16,5.5))
@@ -362,6 +393,8 @@ provenance=dict(date='2026-11-09',data_file=str(DATA/'presentation_data.mat'),
     stopping='Max relative updates of cell-integrated physical density, temperature and speed magnitude <1e-5. CIS monitors kinetic moments; GSIS monitors mixed source.',
     caution='The historical literature table uses CIS, fine velocity grids and equation stopping 1e-10. Do not label it as a current 32x32 GSIS validation.',
     figures=figures)
+provenance['velocity_grid']=('Both velocities: cubic mapping, beta=3, cutoff4, 32 points each'
+                             if CUBIC else 'Normal half-Legendre cutoff8; tangential Hermite; 32 points each')
 (OUT/'provenance.json').write_text(json.dumps(provenance,indent=2,ensure_ascii=False)+'\n')
 
 
@@ -392,6 +425,9 @@ a{color:#2568a6}.scroll{overflow-x:auto}.meta{color:#526270}nav a{display:inline
 <section id="main"><h2>当前主算例</h2><p>空间 P1，64 单元；速度 32×32，法向半区 Gauss-Legendre、流向 Gauss-Hermite；gap=1，初值 H=0。
 Couette：壁速 [-0.01,0.01]、加速度 0；Poiseuille：静止壁、加速度 0.01。两壁等温完全漫反射，稳定参数 [1,δ,δ,δ]。
 CIS/GSIS 统一采用宏观量相对更新 &lt;10⁻⁵ 停机。</p>'''
+if CUBIC:
+    page=page.replace('法向半区 Gauss-Legendre、流向 Gauss-Hermite',
+                      '两个方向均采用参考程序的三次映射、截断 [-4,4]')
 page+=table(summary,[('flow','流动'),('delta','δ'),('cisIterations','CIS 步数'),('gsisIterations','GSIS 步数'),
                      ('iterationRatio','迭代数比'),('absoluteVelocityL2','速度绝对 L2 差'),('relativeVelocityL2Percent','速度相对差 [%]'),
                      ('relativeShearL2Percent','剪应力相对差 [%]'),('relativeFlowDifferencePercent','流量相对差 [%]')])
@@ -437,7 +473,7 @@ sheet=Image.new('RGB',(840*3,560*((len(tiles)+2)//3)),'#E9EEF3')
 for i,tile in enumerate(tiles):sheet.paste(tile,((i%3)*840,(i//3)*560))
 sheet.save(OUT/'overview.png')
 
-archive=OUT.parent/'channel_figures_20261109.zip'
+archive=OUT.with_suffix('.zip')
 with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
     for path in sorted(OUT.rglob('*')):
         if path.is_file():z.write(path,path.relative_to(OUT.parent))

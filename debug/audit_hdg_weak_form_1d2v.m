@@ -136,24 +136,24 @@ assert(max([projectionError,orthogonality,max(abs(fluxIdentity)), ...
 fprintf('Gaussian coefficients: Gram %.3e, stress/heat orthogonality %.3e, HOT identity %.3e, force %.3e\n', ...
     projectionError,orthogonality,max(abs(fluxIdentity)),forceError);
 
-% Locate a kinetic/HDG fixed-point mismatch BEFORE solving the macro problem.
-% Insert kinetic moments/stresses, illustrative kinetic-derived interior
-% traces and reference-code wall data. This is a diagnostic, not a demand
-% that the free HDG interior traces equal kinetic upwind moments.
+% Independently integrate the corrected macro weak form at kinetic fields.
+% Use the flux-compatible base trace, not moments of a kinetic face trace.
 cases=mono1D2V(struct('plot',false,'save',false,'reference',false, ...
     'stopCriterion','equation','tol',1e-10));
 fixedPoint=zeros(2,10); names={'couette','poiseuille'};
 for j=1:2
     k=cases.(names{j}); v=k.velocity; w=v.weight; N=k.mesh.count;
     [~,~,hdg,hot]=gsis_macro_from_kinetic_1d2v(k);
-    B=[ones(numel(w),1),2*v.vx,2*v.vy,v.speed2-2];
+    B=[ones(numel(w),1),2*v.vx,2*v.vy,v.speed2-2, ...
+        v.vx.^2-v.vy.^2,2*v.vx.*v.vy,v.vx.*(v.speed2-2)];
     localStress=k.H*(w.*[v.vx.^2-v.vy.^2,2*v.vx.*v.vy,v.vx.*(v.speed2-2)]);
     fluxLocal=k.H*(w.*v.vx.*B);
-    hat=k.kineticTrace*v.moment; hat(:,1)=hat(:,1)+hat(:,4);
-    hat([1 end],:)=hot.boundary.trace;
-    fluxKinetic=k.kineticTrace*(w.*v.vx.*B);
+    hat=hot.consistency.baseTrace;
+    fluxKinetic=hot.kineticTrace*(w.*v.vx.*B);
     forceNodal=2*k.config.acceleration*v.vy';
     forceMoment=forceNodal*(w.*B);
+    gain=(k.nodalMoments/v.gram)*v.basis';
+    kineticSource=(k.config.delta*(gain-k.H)+forceNodal)*(w.*B);
     primitive=k.nodalMoments; primitive(:,1)=primitive(:,1)+primitive(:,4);
     fields=[primitive,-k.config.delta*localStress];
     s=hdg.cache.stabilization; kineticResidual=0; conservationResidual=0; auxiliaryResidual=0;
@@ -164,32 +164,32 @@ for j=1:2
         forcing=zeros(2,7); forcing(:,3)=2*k.config.acceleration;
         forcing(:,5:7)=hot.derivative(ids,:);
         residual=reshape(reference_weak(U,hatCell,h,k.config.delta,s,forcing),2,7);
+        residual=residual-reshape(hot.consistency.loadCorrection(:,i),2,7);
         conservationResidual=max(conservationResidual,max(abs(residual(:,1:4)),[],'all'));
         auxiliaryResidual=max(auxiliaryResidual,max(abs(residual(:,5:7)),[],'all'));
         M=h*[2 1;1 2]/6; G=[-1 -1;1 1]/2;
         kinetic=-G*fluxLocal(ids,:)+[-fluxKinetic(i,:);fluxKinetic(i+1,:)] ...
-            -M*repmat(forceMoment,2,1);
+            -M*kineticSource(ids,:);
         kineticResidual=max(kineticResidual,max(abs(kinetic),[],'all'));
         fluxHDG=reference_face_flux(U,hatCell,k.config.delta,s);
-        fluxOther=[-fluxKinetic(i,:)';fluxKinetic(i+1,:)'];
+        fluxOther=[-fluxKinetic(i,1:4)';fluxKinetic(i+1,1:4)'];
         difference=reshape(fluxHDG-fluxOther,4,2)';
         fluxDifference=max(fluxDifference,max(abs(difference),[],'all'));
-        sourceDifference=M*(repmat(forceMoment,2,1)-forcing(:,1:4));
-        check=residual(:,1:4)-kinetic-difference-sourceDifference;
+        check=residual-[kinetic(:,1:4),-kinetic(:,5:7)];
         decompositionError=max(decompositionError,max(abs(check),[],'all'));
-        if i==1; boundaryMatch=max(boundaryMatch,max(abs(hatCell(1:4)-hot.boundary.trace(1,:)'))); end
-        if i==N; boundaryMatch=max(boundaryMatch,max(abs(hatCell(5:8)-hot.boundary.trace(2,:)'))); end
+        if i==1; boundaryMatch=max(boundaryMatch,max(abs(fluxHDG(1:4)-hot.boundary.flux(1,:)'))); end
+        if i==N; boundaryMatch=max(boundaryMatch,max(abs(fluxHDG(5:8)-hot.boundary.flux(2,:)'))); end
     end
     fixedPoint(j,:)=[k.config.delta,kineticResidual,conservationResidual,auxiliaryResidual, ...
         fluxDifference,decompositionError,boundaryMatch,max(abs(hot.velocityMomentDefect)), ...
-        k.diagnostics.kinetic,max(abs(forceMoment-[0 0 2*k.config.acceleration 0]))];
+        k.diagnostics.kinetic,max(abs(forceMoment(1:4)-[0 0 2*k.config.acceleration 0]))];
     assert(decompositionError<1e-12 && boundaryMatch<1e-12);
     fprintf('%s fixed-point probe: kinetic moment %.3e; HDG conservation %.3e; auxiliary %.3e; face difference %.3e; decomposition %.3e\n', ...
         names{j},kineticResidual,conservationResidual,auxiliaryResidual,fluxDifference,decompositionError);
 end
 fixedPointAudit=array2table(fixedPoint,'VariableNames',{'delta','kineticMomentWeakResidual', ...
     'hdgConservationWeakResidual','hdgAuxiliaryWeakResidual','maximumFaceFluxDifference', ...
-    'residualDecompositionError','boundaryTraceMismatch','velocityMomentDefect', ...
+    'residualDecompositionError','boundaryFluxMismatch','velocityMomentDefect', ...
     'kineticResidual','discreteForceMomentDefect'});
 fixedPointAudit.flow=names'; fixedPointAudit=movevars(fixedPointAudit,'flow','Before',1);
 writetable(fixedPointAudit,fullfile(folder,'fixed_point_audit.csv'));
@@ -201,7 +201,7 @@ report=struct('operators',operatorAudit,'fixedPoint',fixedPointAudit, ...
     'conservationMomentIdentityError',max(abs(conservationIdentity)), ...
     'highOrderMomentIdentityError',max(abs(fluxIdentity)));
 save(fullfile(folder,'weak_form_audit.mat'),'report');
-fprintf('HDG formula audit passed. Fixed-point differences are diagnostics, not a passed equivalence test.\n');
+fprintf('HDG formula and kinetic-to-macro weak residual matching audit passed.\n');
 end
 
 function [A,B,C,D]=reference_operators(h,delta,s)

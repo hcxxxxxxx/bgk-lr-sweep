@@ -33,7 +33,7 @@ uniform=monoGSIS1D2V(base);
 assert(uniform.converged && uniform.iterations==2);
 assert(abs(uniform.history(1,end)-1)<1e-14);
 
-% GSIS must monitor MIXED source macros (as Calculate_Macro_Properties_ACC),
+% GSIS must monitor returned source macros (as Calculate_Macro_Properties_ACC),
 % not Qkin, and must not veto reference stopping using the equation norm.
 opt=base; opt.flow='Poiseuille'; opt.wallVelocity=[0 0]; opt.initial=0;
 opt.delta=10; opt.cells=8; opt.acceleration=1; opt.tol=.99; opt.maxIter=2;

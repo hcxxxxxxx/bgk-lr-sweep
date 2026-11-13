@@ -4,7 +4,7 @@ function [summary,runs] = runGSISChannelComparison(options)
 % runGSISChannelComparison(struct('deltas',[1 10],'cells',128));
 % Other options are forwarded to mono1D2V. Solver plots/saves are suppressed;
 % CSV/MAT/log results are written to outputDir, with separate residuals for
-% the original CIS equation and the actual mixed-source coupled equation.
+% the original CIS equation and the equation with the returned macro source.
 if nargin<1; options=struct; end
 root=fileparts(mfilename('fullpath'));
 deltas=[1 10];
